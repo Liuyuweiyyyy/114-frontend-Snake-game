@@ -25,7 +25,8 @@ const aiSnake: Ref<Position[]> = ref([
 
 const defenderSnake: Ref<Position[]> = ref([])
 const defenderActive = ref(false)
-const defenderCooldown = ref(false)
+const defenderCooldown = ref(0)  // 剩余冷却毫秒数
+const DEFENDER_COOLDOWN = 5000
 let defenderTimer: ReturnType<typeof setInterval> | null = null
 let defenderCooldownTimer: ReturnType<typeof setInterval> | null = null
 let aiStunned = false
@@ -38,8 +39,20 @@ const aiDirection: Ref<Direction> = ref('LEFT')
 const defenderDirection: Ref<Direction> = ref('RIGHT')
 
 const AI_SPEED_MULTIPLIER = 0.6
-const DEFENDER_COOLDOWN = 5000
 const STUN_DURATION = 2000
+
+// 玩家速度加成（闪电技能触发时）
+let playerSpeedMultiplier = 1.0
+
+// 闪电技能
+const LIGHTNING_COOLDOWN = 5000
+const lightningActive = ref(false)
+const lightningPosition = ref<Position | null>(null)
+const lightningPhase = ref<'none' | 'warning' | 'strike'>('none')
+let lightningCooldown = 0
+let lightningCooldownTimer: ReturnType<typeof setInterval> | null = null
+let lightningWarningTimer: ReturnType<typeof setTimeout> | null = null
+let lightningStrikeTimer: ReturnType<typeof setTimeout> | null = null
 
 const score = ref(0)
 const eatenCount = ref(0)
@@ -49,7 +62,8 @@ const MIN_SPEED = 60
 const SPEED_STEP = 10
 
 function currentSpeed(): number {
-  return Math.max(MIN_SPEED, BASE_SPEED - Math.floor(eatenCount.value / 5) * SPEED_STEP)
+  const baseSpeed = BASE_SPEED - Math.floor(eatenCount.value / 5) * SPEED_STEP
+  return Math.max(MIN_SPEED, baseSpeed / playerSpeedMultiplier)
 }
 
 const gameStatus: Ref<GameStatus> = ref('idle')
@@ -95,9 +109,19 @@ function clearLeaderboard(): void {
   localStorage.removeItem(STORAGE_KEY)
 }
 
-function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | null {
+function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | null {
   const x = (index - 1) % GRID_WIDTH
   const y = Math.floor((index - 1) / GRID_WIDTH)
+
+  // 闪电效果渲染
+  if (lightningActive.value && lightningPosition.value && lightningPhase.value !== 'none') {
+    const lx = lightningPosition.value.x
+    const ly = lightningPosition.value.y
+    if (x >= lx && x < lx + 4 && y >= ly && y < ly + 4) {
+      if (lightningPhase.value === 'warning') return 'lightning-warning'
+      if (lightningPhase.value === 'strike') return 'lightning-strike'
+    }
+  }
 
   const aiHead = aiSnake.value[0]!
   if (aiHead.x === x && aiHead.y === y) return 'ai-head'
@@ -238,6 +262,75 @@ function move(): void {
     }
     food.value = generateFood([...snake.value, ...aiSnake.value])
   }
+
+  // 自动释放闪电技能（Lv.2 解锁，CD 完毕）
+  const currentLevel = Math.floor(eatenCount.value / 5) + 1
+  if (currentLevel >= 2 && lightningCooldown <= 0 && !lightningActive.value) {
+    activateLightning()
+  }
+}
+
+function activateLightning(): void {
+  if (lightningActive.value || lightningCooldown > 0) return
+
+  // 随机生成 4x4 位置
+  const lx = Math.floor(Math.random() * (GRID_WIDTH - 3))
+  const ly = Math.floor(Math.random() * (GRID_HEIGHT - 3))
+  lightningPosition.value = { x: lx, y: ly }
+  lightningActive.value = true
+  lightningPhase.value = 'warning'
+
+  // 2秒后触发闪电
+  if (lightningWarningTimer !== null) clearTimeout(lightningWarningTimer)
+  lightningWarningTimer = setTimeout(() => {
+    lightningPhase.value = 'strike'
+
+    // 检查是否击中目标
+    const playerHead = snake.value[0]!
+    const aiHead = aiSnake.value[0]!
+
+    // 检查玩家是否在范围内
+    if (playerHead.x >= lx && playerHead.x < lx + 4 &&
+        playerHead.y >= ly && playerHead.y < ly + 4) {
+      playerSpeedMultiplier = 1.2
+      if (playerSpeedBoostTimer !== null) clearTimeout(playerSpeedBoostTimer)
+      playerSpeedBoostTimer = setTimeout(() => {
+        playerSpeedMultiplier = 1.0
+      }, 3000)
+    }
+
+    // 检查 AI 是否在范围内
+    if (aiHead.x >= lx && aiHead.x < lx + 4 &&
+        aiHead.y >= ly && aiHead.y < ly + 4) {
+      aiStunned = true
+      if (aiStunTimer !== null) clearTimeout(aiStunTimer)
+      aiStunTimer = setTimeout(() => {
+        aiStunned = false
+      }, 3000)
+    }
+
+    // 闪电特效持续 0.3 秒后消失
+    if (lightningStrikeTimer !== null) clearTimeout(lightningStrikeTimer)
+    lightningStrikeTimer = setTimeout(() => {
+      lightningActive.value = false
+      lightningPosition.value = null
+      lightningPhase.value = 'none'
+
+      // 开始冷却
+      lightningCooldown = LIGHTNING_COOLDOWN
+      if (lightningCooldownTimer !== null) clearInterval(lightningCooldownTimer)
+      lightningCooldownTimer = setInterval(() => {
+        lightningCooldown -= 100
+        if (lightningCooldown <= 0) {
+          lightningCooldown = 0
+          if (lightningCooldownTimer !== null) {
+            clearInterval(lightningCooldownTimer)
+            lightningCooldownTimer = null
+          }
+        }
+      }, 100)
+    }, 300)
+  }, 2000)
 }
 
 function changeDirection(newDir: Direction): void {
@@ -342,11 +435,19 @@ function activateDefender(): void {
       defenderTimer = null
     }
 
-    defenderCooldown.value = true
-    if (defenderCooldownTimer !== null) clearTimeout(defenderCooldownTimer)
-    defenderCooldownTimer = setTimeout(() => {
-      defenderCooldown.value = false
-    }, DEFENDER_COOLDOWN)
+    // 开始冷却
+    defenderCooldown.value = DEFENDER_COOLDOWN
+    if (defenderCooldownTimer !== null) clearInterval(defenderCooldownTimer)
+    defenderCooldownTimer = setInterval(() => {
+      defenderCooldown.value -= 100
+      if (defenderCooldown.value <= 0) {
+        defenderCooldown.value = 0
+        if (defenderCooldownTimer !== null) {
+          clearInterval(defenderCooldownTimer)
+          defenderCooldownTimer = null
+        }
+      }
+    }, 100)
   }, 3000)
 }
 
@@ -391,9 +492,55 @@ function togglePause(): void {
       clearInterval(aiTimer)
       aiTimer = null
     }
+    if (defenderCooldownTimer !== null) {
+      clearInterval(defenderCooldownTimer)
+      defenderCooldownTimer = null
+    }
+    if (defenderTimer !== null) {
+      clearInterval(defenderTimer)
+      defenderTimer = null
+    }
+    if (lightningCooldownTimer !== null) {
+      clearInterval(lightningCooldownTimer)
+      lightningCooldownTimer = null
+    }
+    if (lightningWarningTimer !== null) {
+      clearTimeout(lightningWarningTimer)
+      lightningWarningTimer = null
+    }
+    if (lightningStrikeTimer !== null) {
+      clearTimeout(lightningStrikeTimer)
+      lightningStrikeTimer = null
+    }
   } else if (gameStatus.value === 'paused') {
     gameStatus.value = 'playing'
     gameLoop()
+    // 如果防御者冷却中，重新启动冷却计时器
+    if (defenderCooldown.value > 0 && defenderCooldownTimer === null) {
+      defenderCooldownTimer = setInterval(() => {
+        defenderCooldown.value -= 100
+        if (defenderCooldown.value <= 0) {
+          defenderCooldown.value = 0
+          if (defenderCooldownTimer !== null) {
+            clearInterval(defenderCooldownTimer)
+            defenderCooldownTimer = null
+          }
+        }
+      }, 100)
+    }
+    // 如果闪电冷却中，重新启动冷却计时器
+    if (lightningCooldown > 0 && lightningCooldownTimer === null) {
+      lightningCooldownTimer = setInterval(() => {
+        lightningCooldown -= 100
+        if (lightningCooldown <= 0) {
+          lightningCooldown = 0
+          if (lightningCooldownTimer !== null) {
+            clearInterval(lightningCooldownTimer)
+            lightningCooldownTimer = null
+          }
+        }
+      }, 100)
+    }
   }
 }
 
@@ -492,6 +639,42 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
         <template v-if="gameStatus === 'idle'">按任意鍵開始，按 R 鍵暫停</template>
         <template v-else-if="gameStatus === 'paused'">已暫停，按 R 鍵繼續</template>
       </div>
+
+      <div class="skill-icon" :class="{ cooling: defenderCooldown > 0 }">
+        <div class="skill-content">
+          <span class="snake-emoji">🐍</span>
+        </div>
+        <svg class="cooldown-ring" viewBox="0 0 36 36">
+          <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+          <circle 
+            class="cooldown-progress" 
+            cx="18" 
+            cy="18" 
+            r="16"
+            :style="{ 
+              strokeDashoffset: defenderCooldown > 0 ? (defenderCooldown / DEFENDER_COOLDOWN) * 100 : 0 
+            }"
+          />
+        </svg>
+      </div>
+
+      <div v-if="Math.floor(eatenCount / 5) + 1 >= 2" class="skill-icon" :class="{ cooling: lightningCooldown > 0 }">
+        <div class="skill-content">
+          <span class="lightning-emoji">⚡</span>
+        </div>
+        <svg class="cooldown-ring" viewBox="0 0 36 36">
+          <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+          <circle 
+            class="cooldown-progress" 
+            cx="18" 
+            cy="18" 
+            r="16"
+            :style="{ 
+              strokeDashoffset: lightningCooldown > 0 ? (lightningCooldown / LIGHTNING_COOLDOWN) * 100 : 0 
+            }"
+          />
+        </svg>
+      </div>
     </div>
 
     <div class="side-info">
@@ -543,6 +726,69 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   display: flex;
   flex-direction: column;
   align-items: center;
+  position: relative;
+}
+
+.skill-icon {
+  position: absolute;
+  right: -60px;
+  bottom: 195px;
+  width: 50px;
+  height: 50px;
+}
+
+.skill-icon:last-of-type {
+  bottom: 135px;
+}
+
+.skill-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #a3e4d7;
+  border-radius: 50%;
+  z-index: 1;
+  transition: opacity 0.3s ease;
+}
+
+.skill-icon.cooling .skill-content,
+.skill-icon.cooling .snake-emoji {
+  opacity: 0.3;
+}
+
+.snake-emoji {
+  font-size: 24px;
+}
+
+.lightning-emoji {
+  font-size: 24px;
+}
+
+.skill-icon.cooling .lightning-emoji {
+  opacity: 0.3;
+}
+
+.cooldown-ring {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+
+.cooldown-bg {
+  fill: none;
+  stroke: #ddd;
+  stroke-width: 3;
+}
+
+.cooldown-progress {
+  fill: none;
+  stroke: #48c9b0;
+  stroke-width: 3;
+  stroke-dasharray: 100;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.1s linear;
 }
 
 .header {
@@ -599,6 +845,20 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 .cell.food {
   background-color: #e74c3c;
   border-radius: 50%;
+}
+
+.cell.lightning-warning {
+  background-color: #ffeaa7;
+}
+
+.cell.lightning-strike {
+  background-color: #fff;
+  animation: lightning-flash 0.15s ease-in-out 2;
+}
+
+@keyframes lightning-flash {
+  0%, 100% { background-color: #fff; }
+  50% { background-color: #f0f8ff; }
 }
 
 .overlay {
