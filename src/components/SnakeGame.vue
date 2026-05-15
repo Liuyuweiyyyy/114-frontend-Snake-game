@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, type Ref } from 'vue'
 
-const GRID_WIDTH = 10
+const GRID_WIDTH = 20
 const GRID_HEIGHT = 20
 
 interface Position {
@@ -11,24 +11,35 @@ interface Position {
 
 type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT'
 type GameStatus = 'idle' | 'playing' | 'paused' | 'gameover'
-type GridType = 'player' | 'ai'
-
-const playerSnake: Ref<Position[]> = ref([
-  { x: 5, y: 10 },
-  { x: 4, y: 10 },
-  { x: 3, y: 10 },
+const snake: Ref<Position[]> = ref([
+  { x: 10, y: 10 },
+  { x: 9, y: 10 },
+  { x: 8, y: 10 },
 ])
+
 const aiSnake: Ref<Position[]> = ref([
-  { x: 4, y: 10 },
-  { x: 5, y: 10 },
-  { x: 6, y: 10 },
+  { x: 5, y: 5 },
+  { x: 6, y: 5 },
+  { x: 7, y: 5 },
 ])
 
-const playerFood: Ref<Position> = ref({ x: 8, y: 10 })
-const aiFood: Ref<Position> = ref({ x: 1, y: 10 })
+const defenderSnake: Ref<Position[]> = ref([])
+const defenderActive = ref(false)
+const defenderCooldown = ref(false)
+let defenderTimer: ReturnType<typeof setInterval> | null = null
+let defenderCooldownTimer: ReturnType<typeof setInterval> | null = null
+let aiStunned = false
+let aiStunTimer: ReturnType<typeof setInterval> | null = null
 
-const playerDirection: Ref<Direction> = ref('RIGHT')
+const food: Ref<Position> = ref({ x: 15, y: 10 })
+
+const direction: Ref<Direction> = ref('RIGHT')
 const aiDirection: Ref<Direction> = ref('LEFT')
+const defenderDirection: Ref<Direction> = ref('RIGHT')
+
+const AI_SPEED_MULTIPLIER = 0.6
+const DEFENDER_COOLDOWN = 5000
+const STUN_DURATION = 2000
 
 const score = ref(0)
 const eatenCount = ref(0)
@@ -38,15 +49,14 @@ const MIN_SPEED = 60
 const SPEED_STEP = 10
 
 function currentSpeed(): number {
-  return Math.max(MIN_SPEED, BASE_SPEED - Math.floor(eatenCount.value / 10) * SPEED_STEP)
+  return Math.max(MIN_SPEED, BASE_SPEED - Math.floor(eatenCount.value / 5) * SPEED_STEP)
 }
 
 const gameStatus: Ref<GameStatus> = ref('idle')
 
 let gameTimer: ReturnType<typeof setInterval> | null = null
+let aiTimer: ReturnType<typeof setInterval> | null = null
 let pendingDirection: Direction | null = null
-let playerFoodEaten = false
-let aiFoodEaten = false
 
 interface LeaderboardEntry {
   name: string
@@ -85,23 +95,30 @@ function clearLeaderboard(): void {
   localStorage.removeItem(STORAGE_KEY)
 }
 
-function getMirrorDirection(dir: Direction): Direction {
-  return ({ UP: 'UP', DOWN: 'DOWN', LEFT: 'RIGHT', RIGHT: 'LEFT' } as Record<Direction, Direction>)[dir]
-}
-
-function getCellType(index: number, grid: GridType): 'snake' | 'head' | 'food' | null {
+function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | null {
   const x = (index - 1) % GRID_WIDTH
   const y = Math.floor((index - 1) / GRID_WIDTH)
 
-  const snake = grid === 'player' ? playerSnake.value : aiSnake.value
-  const food = grid === 'player' ? playerFood.value : aiFood.value
+  const aiHead = aiSnake.value[0]!
+  if (aiHead.x === x && aiHead.y === y) return 'ai-head'
+  for (const seg of aiSnake.value) {
+    if (seg.x === x && seg.y === y) return 'ai-snake'
+  }
 
-  const head = snake[0]!
+  if (defenderActive.value) {
+    const defenderHead = defenderSnake.value[0]!
+    if (defenderHead.x === x && defenderHead.y === y) return 'defender-head'
+    for (const seg of defenderSnake.value) {
+      if (seg.x === x && seg.y === y) return 'defender-snake'
+    }
+  }
+
+  const head = snake.value[0]!
   if (head.x === x && head.y === y) return 'head'
-  for (const seg of snake) {
+  for (const seg of snake.value) {
     if (seg.x === x && seg.y === y) return 'snake'
   }
-  if (food.x === x && food.y === y) return 'food'
+  if (food.value.x === x && food.value.y === y) return 'food'
   return null
 }
 
@@ -128,6 +145,7 @@ function moveSnake(
   snake: Position[],
   food: Position,
   dir: Direction,
+  grow: boolean = true,
 ): { died: boolean; ate: boolean } {
   const head = { ...snake[0]! }
   switch (dir) {
@@ -146,51 +164,79 @@ function moveSnake(
 
   snake.unshift(head)
 
-  if (head.x === food.x && head.y === food.y) {
-    return { died: false, ate: true }
-  } else {
+  const ate = head.x === food.x && head.y === food.y
+  if (!ate || !grow) {
     snake.pop()
-    return { died: false, ate: false }
   }
+  return { died: false, ate }
+}
+
+function getAIDirection(snake: Position[], food: Position): Direction {
+  const head = snake[0]!
+  const dx = food.x - head.x
+  const dy = food.y - head.y
+
+  const candidates: Direction[] = []
+  if (dy < 0) candidates.push('UP')
+  else if (dy > 0) candidates.push('DOWN')
+  if (dx < 0) candidates.push('LEFT')
+  else if (dx > 0) candidates.push('RIGHT')
+
+  if (candidates.length === 0) return 'RIGHT'
+  if (candidates.length === 1) return candidates[0]!
+
+  const opposites: Record<Direction, Direction> = {
+    UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT',
+  }
+
+  for (const dir of candidates) {
+    if (dir === opposites[aiDirection.value]) continue
+
+    let next = { x: head.x, y: head.y }
+    if (dir === 'UP') next.y--
+    if (dir === 'DOWN') next.y++
+    if (dir === 'LEFT') next.x--
+    if (dir === 'RIGHT') next.x++
+
+    next.x = ((next.x % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH
+    next.y = ((next.y % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
+
+    const allSnakes = [...snake, ...aiSnake.value]
+    if (!allSnakes.some(seg => seg.x === next.x && seg.y === next.y)) {
+      return dir
+    }
+  }
+
+  return candidates[0]!
 }
 
 function move(): void {
   if (gameStatus.value !== 'playing') return
 
   if (pendingDirection !== null) {
-    playerDirection.value = pendingDirection
+    direction.value = pendingDirection
     pendingDirection = null
   }
 
-  aiDirection.value = getMirrorDirection(playerDirection.value)
-
-  const playerResult = moveSnake(playerSnake.value, playerFood.value, playerDirection.value)
-  if (playerResult.ate) { playerFoodEaten = true; playerFood.value = { x: -1, y: -1 } }
-  if (playerResult.died) {
+  const result = moveSnake(snake.value, food.value, direction.value)
+  if (result.died) {
     gameStatus.value = 'gameover'
     return
   }
 
-  const aiResult = moveSnake(aiSnake.value, aiFood.value, aiDirection.value)
-  if (aiResult.ate) { aiFoodEaten = true; aiFood.value = { x: -1, y: -1 } }
-  if (aiResult.died) {
-    gameStatus.value = 'gameover'
-    return
-  }
-
-  if (playerFoodEaten && aiFoodEaten) {
-    const prevLevel = Math.floor(eatenCount.value / 10)
-    score.value += 40
-    eatenCount.value += 2
-    if (Math.floor(eatenCount.value / 10) > prevLevel && gameTimer !== null) {
+  if (result.ate) {
+    score.value += 20
+    eatenCount.value++
+    const prevLevel = Math.floor((eatenCount.value - 1) / 10)
+    if (Math.floor(eatenCount.value / 5) > prevLevel && gameTimer !== null) {
       clearInterval(gameTimer)
       gameTimer = setInterval(move, currentSpeed())
+      if (aiTimer !== null) {
+        clearInterval(aiTimer)
+        aiTimer = setInterval(moveAISnake, currentSpeed() / AI_SPEED_MULTIPLIER)
+      }
     }
-    playerFood.value = generateFood(playerSnake.value)
-    const mirrorX = GRID_WIDTH - 1 - playerFood.value.x
-    aiFood.value = { x: mirrorX, y: Math.floor(Math.random() * GRID_HEIGHT) }
-    playerFoodEaten = false
-    aiFoodEaten = false
+    food.value = generateFood([...snake.value, ...aiSnake.value])
   }
 }
 
@@ -198,34 +244,138 @@ function changeDirection(newDir: Direction): void {
   const opposites: Record<Direction, Direction> = {
     UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT',
   }
-  if (newDir !== opposites[playerDirection.value]) {
+  if (newDir !== opposites[direction.value]) {
     pendingDirection = newDir
   }
 }
 
+function moveAISnake(): void {
+  if (gameStatus.value !== 'playing') return
+  if (aiStunned) return
+
+  aiDirection.value = getAIDirection(aiSnake.value, food.value)
+  const aiResult = moveSnake(aiSnake.value, food.value, aiDirection.value, false)
+
+  if (aiResult.ate) {
+    score.value = Math.max(0, score.value - 10)
+    food.value = generateFood([...snake.value, ...aiSnake.value])
+  }
+}
+
+function getDefenderTargetDirection(defender: Position[], target: Position[]): Direction {
+  const head = defender[0]!
+  const targetHead = target[0]!
+  const dx = targetHead.x - head.x
+  const dy = targetHead.y - head.y
+
+  const candidates: Direction[] = []
+  if (dy < 0) candidates.push('UP')
+  else if (dy > 0) candidates.push('DOWN')
+  if (dx < 0) candidates.push('LEFT')
+  else if (dx > 0) candidates.push('RIGHT')
+
+  if (candidates.length === 0) return 'RIGHT'
+  if (candidates.length === 1) return candidates[0]!
+
+  const opposites: Record<Direction, Direction> = {
+    UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT',
+  }
+
+  for (const dir of candidates) {
+    if (dir === opposites[defenderDirection.value]) continue
+
+    let next = { x: head.x, y: head.y }
+    if (dir === 'UP') next.y--
+    if (dir === 'DOWN') next.y++
+    if (dir === 'LEFT') next.x--
+    if (dir === 'RIGHT') next.x++
+
+    next.x = ((next.x % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH
+    next.y = ((next.y % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
+
+    const allSnakes = [...snake.value, ...aiSnake.value, ...defender]
+    if (!allSnakes.some(seg => seg.x === next.x && seg.y === next.y)) {
+      return dir
+    }
+  }
+
+  return candidates[0]!
+}
+
+function moveDefenderSnake(): void {
+  if (gameStatus.value !== 'playing' || !defenderActive.value) return
+
+  defenderDirection.value = getDefenderTargetDirection(defenderSnake.value, aiSnake.value)
+
+  const result = moveSnake(defenderSnake.value, { x: -1, y: -1 }, defenderDirection.value, false)
+
+  const aiHead = aiSnake.value[0]!
+  const defenderHead = defenderSnake.value[0]!
+  if (defenderHead.x === aiHead.x && defenderHead.y === aiHead.y) {
+    aiStunned = true
+    if (aiStunTimer !== null) clearTimeout(aiStunTimer)
+    aiStunTimer = setTimeout(() => {
+      aiStunned = false
+    }, STUN_DURATION)
+  }
+}
+
+function activateDefender(): void {
+  if (defenderActive.value || defenderCooldown.value || gameStatus.value !== 'playing') return
+
+  const head = snake.value[0]!
+  defenderSnake.value = [
+    { x: head.x + 1, y: head.y },
+  ]
+  defenderDirection.value = 'RIGHT'
+  defenderActive.value = true
+
+  if (defenderTimer !== null) clearInterval(defenderTimer)
+  const defenderSpeed = BASE_SPEED / 1.5
+  defenderTimer = setInterval(moveDefenderSnake, defenderSpeed)
+
+  setTimeout(() => {
+    defenderActive.value = false
+    defenderSnake.value = []
+    if (defenderTimer !== null) {
+      clearInterval(defenderTimer)
+      defenderTimer = null
+    }
+
+    defenderCooldown.value = true
+    if (defenderCooldownTimer !== null) clearTimeout(defenderCooldownTimer)
+    defenderCooldownTimer = setTimeout(() => {
+      defenderCooldown.value = false
+    }, DEFENDER_COOLDOWN)
+  }, 3000)
+}
+
 function gameLoop(): void {
   if (gameTimer !== null) clearInterval(gameTimer)
+  if (aiTimer !== null) clearInterval(aiTimer)
   gameTimer = setInterval(move, currentSpeed())
+  const aiSpeed = currentSpeed() / AI_SPEED_MULTIPLIER
+  aiTimer = setInterval(moveAISnake, aiSpeed)
 }
 
 function startGame(): void {
   if (gameTimer !== null) clearInterval(gameTimer)
-  playerSnake.value = [
-    { x: 5, y: 10 },
-    { x: 4, y: 10 },
-    { x: 3, y: 10 },
+  if (aiTimer !== null) clearInterval(aiTimer)
+  snake.value = [
+    { x: 10, y: 10 },
+    { x: 9, y: 10 },
+    { x: 8, y: 10 },
   ]
   aiSnake.value = [
-    { x: 4, y: 10 },
-    { x: 5, y: 10 },
-    { x: 6, y: 10 },
+    { x: 5, y: 5 },
+    { x: 6, y: 5 },
+    { x: 7, y: 5 },
   ]
-  playerDirection.value = 'RIGHT'
   aiDirection.value = 'LEFT'
+  direction.value = 'RIGHT'
   score.value = 0
   eatenCount.value = 0
-  playerFood.value = generateFood(playerSnake.value)
-  aiFood.value = generateFood(aiSnake.value)
+  food.value = generateFood([...snake.value, ...aiSnake.value])
   gameStatus.value = 'playing'
   gameLoop()
 }
@@ -237,6 +387,10 @@ function togglePause(): void {
       clearInterval(gameTimer)
       gameTimer = null
     }
+    if (aiTimer !== null) {
+      clearInterval(aiTimer)
+      aiTimer = null
+    }
   } else if (gameStatus.value === 'paused') {
     gameStatus.value = 'playing'
     gameLoop()
@@ -247,10 +401,12 @@ function handleKeydown(e: KeyboardEvent): void {
   const isArrow = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)
 
   if (gameStatus.value === 'gameover') {
-    e.preventDefault()
-    saveScore()
-    startGame()
-    if (isArrow) pendingDirection = ({ ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' } as Record<string, Direction>)[e.key] ?? null
+    if (isArrow || e.key === ' ') {
+      e.preventDefault()
+      saveScore()
+      startGame()
+      if (isArrow) pendingDirection = ({ ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' } as Record<string, Direction>)[e.key] ?? null
+    }
     return
   }
 
@@ -261,9 +417,15 @@ function handleKeydown(e: KeyboardEvent): void {
     return
   }
 
-  if (e.key === ' ') {
+  if (e.key === 'r' || e.key === 'R') {
     e.preventDefault()
     togglePause()
+    return
+  }
+
+  if (e.key === ' ') {
+    e.preventDefault()
+    activateDefender()
     return
   }
 
@@ -314,40 +476,21 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
     <div class="game-area">
       <div class="header">
-        <h1>貪食蛇 — 雙蛇</h1>
+        <h1>貪食蛇</h1>
       </div>
 
-      <div class="grids-container">
-        <div class="grid-wrapper">
-          <div class="grid-label left-label">左蛇</div>
-          <div class="grid-container">
-            <div
-              v-for="i in GRID_WIDTH * GRID_HEIGHT"
-              :key="i"
-              class="cell"
-              :class="getCellType(i, 'ai')"
-            ></div>
-          </div>
-          <div class="grid-mode">鏡像</div>
-        </div>
-
-        <div class="grid-wrapper">
-          <div class="grid-label right-label">右蛇</div>
-          <div class="grid-container">
-            <div
-              v-for="i in GRID_WIDTH * GRID_HEIGHT"
-              :key="i"
-              class="cell"
-              :class="getCellType(i, 'player')"
-            ></div>
-          </div>
-          <div class="grid-mode">正常</div>
-        </div>
+      <div class="grid-container">
+        <div
+          v-for="i in GRID_WIDTH * GRID_HEIGHT"
+          :key="i"
+          class="cell"
+          :class="getCellType(i)"
+        ></div>
       </div>
 
       <div class="info">
-        <template v-if="gameStatus === 'idle'">按空白鍵或任意鍵開始</template>
-        <template v-else-if="gameStatus === 'paused'">已暫停，按空白鍵繼續</template>
+        <template v-if="gameStatus === 'idle'">按任意鍵開始，按 R 鍵暫停</template>
+        <template v-else-if="gameStatus === 'paused'">已暫停，按 R 鍵繼續</template>
       </div>
     </div>
 
@@ -358,7 +501,10 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
       </div>
       <div class="info-card level-card">
         <span class="info-label">等級</span>
-        <span class="info-value">Lv.{{ Math.floor(eatenCount / 10) + 1 }}</span>
+        <span class="info-value">Lv.{{ Math.floor(eatenCount / 5) + 1 }}</span>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: (eatenCount % 5) * 20 + '%' }"></div>
+        </div>
       </div>
     </div>
 
@@ -375,8 +521,8 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
         </div>
         <div class="overlay-actions">
           <button class="btn" @click="saveScore">儲存分數</button>
-          <button class="btn btn-secondary" @click="startGame">重新開始</button>
         </div>
+        <p class="restart-hint">按空白鍵或方向鍵重新開始</p>
       </div>
     </div>
   </div>
@@ -410,41 +556,9 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   color: #1a5276;
 }
 
-.grids-container {
-  display: flex;
-  gap: 0;
-}
-
-.grid-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.grid-label {
-  font-size: 14px;
-  font-weight: 700;
-  margin-bottom: 8px;
-  letter-spacing: 1px;
-}
-
-.grid-label.left-label {
-  color: #e67e22;
-}
-
-.grid-label.right-label {
-  color: #27ae60;
-}
-
-.grid-mode {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #999;
-}
-
 .grid-container {
   display: grid;
-  grid-template-columns: repeat(10, 24px);
+  grid-template-columns: repeat(20, 24px);
   grid-template-rows: repeat(20, 24px);
   gap: 1px;
   background-color: #7fb3d8;
@@ -458,20 +572,28 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   background-color: #d4eaf7;
 }
 
-.grid-wrapper:first-child .cell.snake {
-  background-color: #e67e22;
-}
-
-.grid-wrapper:first-child .cell.head {
-  background-color: #d35400;
-}
-
-.grid-wrapper:last-child .cell.snake {
+.cell.snake {
   background-color: #27ae60;
 }
 
-.grid-wrapper:last-child .cell.head {
+.cell.head {
   background-color: #1a7a3a;
+}
+
+.cell.ai-snake {
+  background-color: #f5b7b1;
+}
+
+.cell.ai-head {
+  background-color: #e74c3c;
+}
+
+.cell.defender-snake {
+  background-color: #a3e4d7;
+}
+
+.cell.defender-head {
+  background-color: #48c9b0;
 }
 
 .cell.food {
@@ -556,6 +678,12 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   justify-content: center;
 }
 
+.restart-hint {
+  margin-top: 12px;
+  font-size: 14px;
+  color: #666;
+}
+
 .leaderboard {
   position: absolute;
   left: calc(50% - 505px);
@@ -586,6 +714,22 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 .info-card.level-card {
   background: linear-gradient(135deg, #2c7bb6, #1a5276);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #f39c12;
+  border-radius: 3px;
+  transition: width 0.2s ease;
 }
 
 .info-label {
