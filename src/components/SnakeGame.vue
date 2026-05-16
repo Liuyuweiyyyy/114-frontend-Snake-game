@@ -250,7 +250,7 @@ function generateAvailableSkills(): void {
     availableSkills.value.push({
       key: 'thunderDragon',
       name: '天譴之龍',
-      desc: '召喚6隻天譴之龍，撞擊效果依次眩暈→停頓→連鎖雷擊',
+      desc: '召喚6隻天譴之龍，撞擊效果依次眩暈→停頓→<span class="tooltip-text-chain">連續雷擊</span>',
       isUnlock: true
     })
   }
@@ -1079,8 +1079,8 @@ function resetGame(): void {
   playerSpeedBoosted.value = false
   iceActive.value = false
   
-  defenderSkill.value.level = 1
-  lightningSkill.value.level = 0
+  defenderSkill.value.level = 3
+  lightningSkill.value.level = 3
   lightningSkill.value.cooldown = 0
   iceSkill.value.level = 0
   iceSkill.value.cooldown = 0
@@ -2025,6 +2025,27 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 .skill-card .skill-desc :deep(.tooltip-text):hover::after {
   content: '敵人會走一步停一步';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #333;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.skill-card .skill-desc :deep(.tooltip-text-chain) {
+  text-decoration: underline;
+  cursor: help;
+  position: relative;
+}
+
+.skill-card .skill-desc :deep(.tooltip-text-chain):hover::after {
+  content: '以敵人蛇為中心 5×5 雷區爆炸，周圍敵人全部短暫眩暈1秒，且眩暈完停頓持續1秒';
   position: absolute;
   bottom: 100%;
   left: 50%;
