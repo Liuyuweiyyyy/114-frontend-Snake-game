@@ -107,7 +107,6 @@ function currentSpeed(): number {
 const gameStatus: Ref<GameStatus> = ref('idle')
 
 let gameTimer: ReturnType<typeof setInterval> | null = null
-let aiTimer: ReturnType<typeof setInterval> | null = null
 let pendingDirection: Direction | null = null
 
 interface LeaderboardEntry {
@@ -264,7 +263,7 @@ function selectSkill(skillKey: string): void {
   gameLoop()
 }
 
-function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | null {
+function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | 'ice-field' | null {
   const x = (index - 1) % GRID_WIDTH
   const y = Math.floor((index - 1) / GRID_WIDTH)
 
@@ -456,20 +455,12 @@ function move(): void {
     if (currentLevel > prevLevel && gameTimer !== null) {
       clearInterval(gameTimer)
       gameTimer = setInterval(move, currentSpeed())
-      if (aiTimer !== null) {
-        clearInterval(aiTimer)
-        aiTimer = setInterval(moveAISnake, currentSpeed() / AI_SPEED_MULTIPLIER)
-      }
       // 触发技能卡牌选择
       gameStatus.value = 'paused'
       if (gameTimer !== null) {
         clearInterval(gameTimer)
         gameTimer = null
-      }
-      if (aiTimer !== null) {
-        clearInterval(aiTimer)
-        aiTimer = null
-      }
+      }      
       showSkillCards.value = true
       generateAvailableSkills()
     }
@@ -587,6 +578,7 @@ function moveAISnake(index: number): void {
   if (gameStatus.value !== 'playing') return
   
   const ai = aiSnakes.value[index]
+  if(!ai)  return
   
   // 冰冻减速逻辑（移到眩晕检查之前，这样眩晕时也能减速）
   if (iceActive.value) {
@@ -651,7 +643,7 @@ function getDefenderTargetDirection(defender: Position[], targets: AISnake[]): D
   const head = defender[0]!
   
   // 找到最近的 AI 蛇
-  let nearestTarget = targets[0]
+  let nearestTarget = targets[0]!
   let minDist = Infinity
   
   for (const target of targets) {
