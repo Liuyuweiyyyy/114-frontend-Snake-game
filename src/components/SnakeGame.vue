@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { ref, type Ref } from 'vue'
+import { useLeaderboard } from '../composables/useLeaderboard'
+
+const emit = defineEmits<{
+  (e: 'goMenu'): void
+}>()
 
 const GRID_WIDTH = 20
 const GRID_HEIGHT = 20
@@ -10,7 +15,7 @@ interface Position {
 }
 
 type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT'
-type GameStatus = 'idle' | 'playing' | 'paused' | 'gameover'
+type GameStatus = 'idle' | 'playing' | 'paused' | 'levelup' | 'gameover'
 const snake: Ref<Position[]> = ref([
   { x: 10, y: 10 },
   { x: 9, y: 10 },
@@ -115,35 +120,31 @@ interface LeaderboardEntry {
 }
 
 const playerName = ref('')
-const leaderboard = ref<LeaderboardEntry[]>([])
-const STORAGE_KEY = 'snake-game-leaderboard'
-
-function loadLeaderboard(): void {
-  const raw = localStorage.getItem(STORAGE_KEY)
-  if (raw) {
-    leaderboard.value = JSON.parse(raw) as LeaderboardEntry[]
-  }
-}
-
-function saveLeaderboard(): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(leaderboard.value))
-}
+const { leaderboard, loadLeaderboard, addScore, clearLeaderboard } = useLeaderboard()
+const spacePressCount = ref(0)
+const rPressCount = ref(0)
 
 function saveScore(): void {
-  const name = playerName.value.trim() || '匿名'
-  leaderboard.value.push({ name, score: score.value })
-  leaderboard.value.sort((a, b) => b.score - a.score)
-  if (leaderboard.value.length > 10) {
-    leaderboard.value = leaderboard.value.slice(0, 10)
-  }
-  saveLeaderboard()
+  addScore(playerName.value, score.value)
   gameStatus.value = 'idle'
   playerName.value = ''
 }
 
-function clearLeaderboard(): void {
-  leaderboard.value = []
-  localStorage.removeItem(STORAGE_KEY)
+function saveScoreAndRestart(): void {
+  addScore(playerName.value, score.value)
+  playerName.value = ''
+  spacePressCount.value = 0
+  rPressCount.value = 0
+  resetGame()
+  gameStatus.value = 'idle'
+}
+
+function goToMenu(): void {
+  addScore(playerName.value, score.value)
+  gameStatus.value = 'idle'
+  playerName.value = ''
+  spacePressCount.value = 0
+  emit('goMenu')
 }
 
 function generateAvailableSkills(): void {
@@ -258,6 +259,12 @@ function selectSkill(skillKey: string): void {
     }
   }
   
+  showSkillCards.value = false
+  gameStatus.value = 'playing'
+  gameLoop()
+}
+
+function resumeFromLevelUp(): void {
   showSkillCards.value = false
   gameStatus.value = 'playing'
   gameLoop()
@@ -455,8 +462,7 @@ function move(): void {
     if (currentLevel > prevLevel && gameTimer !== null) {
       clearInterval(gameTimer)
       gameTimer = setInterval(move, currentSpeed())
-      // 触发技能卡牌选择
-      gameStatus.value = 'paused'
+      gameStatus.value = 'levelup'
       if (gameTimer !== null) {
         clearInterval(gameTimer)
         gameTimer = null
@@ -839,16 +845,49 @@ function gameLoop(): void {
   gameTimer = setInterval(move, currentSpeed())
 }
 
-function startGame(): void {
+function resetGame(): void {
   playerSpeedBoosted.value = false
+  iceActive.value = false
   
-  // 重置技能等级
   defenderSkill.value.level = 1
   lightningSkill.value.level = 0
   lightningSkill.value.cooldown = 0
   iceSkill.value.level = 0
   iceSkill.value.cooldown = 0
-  iceActive.value = false
+  
+  lightningActive.value = false
+  lightningPosition.value = null
+  lightningPhase.value = 'none'
+  if (lightningWarningTimer !== null) {
+    clearTimeout(lightningWarningTimer)
+    lightningWarningTimer = null
+  }
+  if (lightningStrikeTimer !== null) {
+    clearTimeout(lightningStrikeTimer)
+    lightningStrikeTimer = null
+  }
+  if (lightningCooldownTimer !== null) {
+    clearInterval(lightningCooldownTimer)
+    lightningCooldownTimer = null
+  }
+  
+  defenderActive.value = false
+  defenderActive2.value = false
+  defenderSnake.value = []
+  defenderSnake2.value = []
+  if (defenderTimer !== null) {
+    clearInterval(defenderTimer)
+    defenderTimer = null
+  }
+  if (defenderTimer2 !== null) {
+    clearInterval(defenderTimer2)
+    defenderTimer2 = null
+  }
+  defenderCooldown.value = 0
+  if (defenderCooldownTimer !== null) {
+    clearInterval(defenderCooldownTimer)
+    defenderCooldownTimer = null
+  }
   
   if (gameTimer !== null) clearInterval(gameTimer)
   for (const timer of aiTimers) {
@@ -868,6 +907,10 @@ function startGame(): void {
   
   const allAISnakePositions = aiSnakes.value.flatMap(s => s.positions)
   food.value = generateFood([...snake.value, ...allAISnakePositions])
+}
+
+function startGame(): void {
+  resetGame()
   gameStatus.value = 'playing'
   gameLoop()
   startAllAITimers()
@@ -952,11 +995,21 @@ function handleKeydown(e: KeyboardEvent): void {
   const isArrow = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)
 
   if (gameStatus.value === 'gameover') {
-    if (isArrow || e.key === ' ') {
+    if (e.key === ' ') {
+      e.preventDefault()
+      spacePressCount.value++
+      if (spacePressCount.value >= 2) {
+        spacePressCount.value = 0
+        saveScore()
+        startGame()
+      }
+      return
+    }
+    if (isArrow) {
       e.preventDefault()
       saveScore()
       startGame()
-      if (isArrow) pendingDirection = ({ ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' } as Record<string, Direction>)[e.key] ?? null
+      pendingDirection = ({ ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' } as Record<string, Direction>)[e.key] ?? null
     }
     return
   }
@@ -964,13 +1017,39 @@ function handleKeydown(e: KeyboardEvent): void {
   if (gameStatus.value === 'idle') {
     e.preventDefault()
     startGame()
-    if (isArrow) pendingDirection = ({ ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' } as Record<string, Direction>)[e.key] ?? null
+    const dir = ({ ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' } as Record<string, Direction>)[e.key]
+    if (dir && dir !== 'LEFT') {
+      pendingDirection = dir
+    }
     return
   }
 
   if (e.key === 'r' || e.key === 'R') {
     e.preventDefault()
-    togglePause()
+    if (gameStatus.value === 'paused') {
+      rPressCount.value++
+      if (rPressCount.value >= 2) {
+        rPressCount.value = 0
+        togglePause()
+      }
+    } else if (gameStatus.value === 'playing') {
+      togglePause()
+    } else if (gameStatus.value === 'levelup') {
+      rPressCount.value++
+      if (rPressCount.value >= 2) {
+        rPressCount.value = 0
+        resumeFromLevelUp()
+      }
+    }
+    return
+  }
+
+  if (showSkillCards.value) {
+    const num = parseInt(e.key)
+    if (num >= 1 && num <= 3 && availableSkills.value[num - 1]) {
+      e.preventDefault()
+      selectSkill(availableSkills.value[num - 1]!.key)
+    }
     return
   }
 
@@ -1044,62 +1123,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
         <template v-else-if="gameStatus === 'paused'">已暫停，按 R 鍵繼續</template>
       </div>
 
-      <div class="skill-icon" :class="{ cooling: defenderCooldown > 0 }">
-        <div class="skill-content">
-          <span class="snake-emoji">🐍</span>
-          <span class="skill-level">{{ defenderSkill.level }}</span>
-        </div>
-        <svg class="cooldown-ring" viewBox="0 0 36 36">
-          <circle class="cooldown-bg" cx="18" cy="18" r="16" />
-          <circle 
-            class="cooldown-progress" 
-            cx="18" 
-            cy="18" 
-            r="16"
-            :style="{ 
-              strokeDashoffset: defenderCooldown > 0 ? (defenderCooldown / DEFENDER_COOLDOWN) * 100 : 0 
-            }"
-          />
-        </svg>
-      </div>
-
-      <div v-if="lightningSkill.level > 0" class="skill-icon" :class="{ cooling: lightningSkill.cooldown > 0 }">
-        <div class="skill-content">
-          <span class="lightning-emoji">⚡</span>
-          <span class="skill-level">{{ lightningSkill.level }}</span>
-        </div>
-        <svg class="cooldown-ring" viewBox="0 0 36 36">
-          <circle class="cooldown-bg" cx="18" cy="18" r="16" />
-          <circle 
-            class="cooldown-progress" 
-            cx="18" 
-            cy="18" 
-            r="16"
-            :style="{ 
-              strokeDashoffset: lightningSkill.cooldown > 0 ? (lightningSkill.cooldown / LIGHTNING_COOLDOWN) * 100 : 0 
-            }"
-          />
-        </svg>
-      </div>
-
-      <div v-if="iceSkill.level > 0" class="skill-icon" :class="{ cooling: iceSkill.cooldown > 0 }">
-        <div class="skill-content">
-          <span class="ice-emoji">❄️</span>
-          <span class="skill-level">{{ iceSkill.level }}</span>
-        </div>
-        <svg class="cooldown-ring" viewBox="0 0 36 36">
-          <circle class="cooldown-bg" cx="18" cy="18" r="16" />
-          <circle 
-            class="cooldown-progress" 
-            cx="18" 
-            cy="18" 
-            r="16"
-            :style="{ 
-              strokeDashoffset: iceSkill.cooldown > 0 ? (iceSkill.cooldown / ICE_COOLDOWN) * 100 : 0 
-            }"
-          />
-        </svg>
-      </div>
+      
     </div>
 
     <div class="side-info">
@@ -1112,6 +1136,64 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
         <span class="info-value">Lv.{{ Math.floor(eatenCount / 5) + 1 }}</span>
         <div class="progress-bar">
           <div class="progress-fill" :style="{ width: (eatenCount % 5) * 20 + '%' }"></div>
+        </div>
+      </div>
+      <div class="skills-container">
+        <div class="skill-icon" :class="{ cooling: defenderCooldown > 0 }">
+          <div class="skill-content">
+            <span class="snake-emoji">🐍</span>
+            <span class="skill-level">{{ defenderSkill.level }}</span>
+          </div>
+          <svg class="cooldown-ring" viewBox="0 0 36 36">
+            <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+            <circle 
+              class="cooldown-progress" 
+              cx="18" 
+              cy="18" 
+              r="16"
+              :style="{ 
+                strokeDashoffset: defenderCooldown > 0 ? (defenderCooldown / DEFENDER_COOLDOWN) * 100 : 0 
+              }"
+            />
+          </svg>
+        </div>
+
+        <div v-if="lightningSkill.level > 0" class="skill-icon" :class="{ cooling: lightningSkill.cooldown > 0 }">
+          <div class="skill-content">
+            <span class="lightning-emoji">⚡</span>
+            <span class="skill-level">{{ lightningSkill.level }}</span>
+          </div>
+          <svg class="cooldown-ring" viewBox="0 0 36 36">
+            <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+            <circle 
+              class="cooldown-progress" 
+              cx="18" 
+              cy="18" 
+              r="16"
+              :style="{ 
+                strokeDashoffset: lightningSkill.cooldown > 0 ? (lightningSkill.cooldown / LIGHTNING_COOLDOWN) * 100 : 0 
+              }"
+            />
+          </svg>
+        </div>
+
+        <div v-if="iceSkill.level > 0" class="skill-icon" :class="{ cooling: iceSkill.cooldown > 0 }">
+          <div class="skill-content">
+            <span class="ice-emoji">❄️</span>
+            <span class="skill-level">{{ iceSkill.level }}</span>
+          </div>
+          <svg class="cooldown-ring" viewBox="0 0 36 36">
+            <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+            <circle 
+              class="cooldown-progress" 
+              cx="18" 
+              cy="18" 
+              r="16"
+              :style="{ 
+                strokeDashoffset: iceSkill.cooldown > 0 ? (iceSkill.cooldown / ICE_COOLDOWN) * 100 : 0 
+              }"
+            />
+          </svg>
         </div>
       </div>
     </div>
@@ -1131,6 +1213,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
             <p class="skill-desc" v-html="skill.desc"></p>
           </div>
         </div>
+        <p class="skill-skip-hint">按 1、2、3 選擇 或 兩次 R 鍵跳過</p>
       </div>
     </div>
 
@@ -1146,9 +1229,21 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
           />
         </div>
         <div class="overlay-actions">
-          <button class="btn" @click="saveScore">儲存分數</button>
+          <button class="btn" @click="saveScoreAndRestart">重新開始</button>
+          <button class="btn" @click="goToMenu">返回主畫面</button>
         </div>
-        <p class="restart-hint">按空白鍵或方向鍵重新開始</p>
+        <p class="restart-hint">按兩次空白鍵重新開始</p>
+      </div>
+    </div>
+
+    <div class="overlay" :class="{ visible: gameStatus === 'paused' && !showSkillCards }">
+      <div class="overlay-content">
+        <h2>暫停中</h2>
+        <div class="overlay-actions">
+          <button class="btn" @click="saveScoreAndRestart">重新開始</button>
+          <button class="btn" @click="goToMenu">返回主畫面</button>
+        </div>
+        <p class="restart-hint">按兩次 R 鍵繼續遊戲</p>
       </div>
     </div>
   </div>
@@ -1172,16 +1267,18 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   position: relative;
 }
 
-.skill-icon {
-  position: absolute;
-  right: -60px;
-  bottom: 195px;
-  width: 50px;
-  height: 50px;
+.skills-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  align-items: left;
 }
 
-.skill-icon:last-of-type {
-  bottom: 135px;
+.skill-icon {
+  position: relative;
+  width: 50px;
+  height: 50px;
 }
 
 .skill-content {
@@ -1392,6 +1489,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   background-color: #2ecc71;
   color: #fff;
   transition: background-color 0.2s;
+  width: 140px;
 }
 
 .btn:hover {
@@ -1571,6 +1669,12 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   border-radius: 12px;
   text-align: center;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.skill-skip-hint {
+  margin-top: 20px;
+  color: #7fb3d8;
+  font-size: 14px;
 }
 
 .skill-card-overlay h2 {
