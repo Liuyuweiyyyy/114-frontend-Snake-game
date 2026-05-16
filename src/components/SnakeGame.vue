@@ -1079,8 +1079,8 @@ function resetGame(): void {
   playerSpeedBoosted.value = false
   iceActive.value = false
   
-  defenderSkill.value.level = 3
-  lightningSkill.value.level = 3
+  defenderSkill.value.level = 1
+  lightningSkill.value.level = 0
   lightningSkill.value.cooldown = 0
   iceSkill.value.level = 0
   iceSkill.value.cooldown = 0
