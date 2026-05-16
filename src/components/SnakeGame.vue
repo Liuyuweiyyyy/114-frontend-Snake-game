@@ -56,6 +56,17 @@ const iceSkill = ref({
   unlocked: false,
   cooldown: 0
 })
+
+const thunderDragonSkill = ref({
+  level: 0,
+  unlocked: false,
+  cooldown: 0
+})
+const chainLightningPosition = ref<Position | null>(null)
+const chainLightningPhase = ref<'none' | 'warning' | 'strike'>('none')
+let chainWarningTimer: ReturnType<typeof setTimeout> | null = null
+let chainStrikeTimer: ReturnType<typeof setTimeout> | null = null
+
 const ICE_COOLDOWN = 5000
 const iceActive = ref(false)
 let iceDurationTimer: ReturnType<typeof setTimeout> | null = null
@@ -96,6 +107,13 @@ const lightningPhase = ref<'none' | 'warning' | 'strike'>('none')
 let lightningCooldownTimer: ReturnType<typeof setInterval> | null = null
 let lightningWarningTimer: ReturnType<typeof setTimeout> | null = null
 let lightningStrikeTimer: ReturnType<typeof setTimeout> | null = null
+
+// 天譴之龍技能
+const THUNDER_DRAGON_COOLDOWN = 5000
+let thunderCooldownTimer: ReturnType<typeof setInterval> | null = null
+const thunderDragons = ref<{ position: Position; direction: Direction }[]>([])
+let thunderDragonTimers: ReturnType<typeof setInterval>[] = []
+const aiHitCounts = ref<Map<string, number>>(new Map())
 
 const score = ref(0)
 const eatenCount = ref(0)
@@ -161,8 +179,8 @@ function generateAvailableSkills(): void {
     aiTimers.push(setInterval(() => moveAISnake(aiSnakes.value.length - 1), aiSpeed))
   }
   
-  // 守护蛇升级选项
-  if (defenderSkill.value.level < 3) {
+  // 守护蛇升级选项（天譴之龍解鎖後隱藏）
+  if (defenderSkill.value.level < 3 && !thunderDragonSkill.value.unlocked) {
     const nextLevel = defenderSkill.value.level + 1
     let desc = ''
     if (nextLevel === 2) {
@@ -178,8 +196,8 @@ function generateAvailableSkills(): void {
     })
   }
   
-  // 闪电解锁选项
-  if (lightningSkill.value.level === 0) {
+  // 闪电解锁选项（天譴之龍解鎖後隱藏）
+  if (lightningSkill.value.level === 0 && !thunderDragonSkill.value.unlocked) {
     availableSkills.value.push({
       key: 'lightning',
       name: '閃電',
@@ -188,8 +206,8 @@ function generateAvailableSkills(): void {
     })
   }
   
-  // 闪电升级选项
-  if (lightningSkill.value.level > 0 && lightningSkill.value.level < 3) {
+  // 闪电升级选项（天譴之龍解鎖後隱藏）
+  if (lightningSkill.value.level > 0 && lightningSkill.value.level < 3 && !thunderDragonSkill.value.unlocked) {
     const nextLevel = lightningSkill.value.level + 1
     let desc = ''
     if (nextLevel === 2) {
@@ -215,7 +233,7 @@ function generateAvailableSkills(): void {
     })
   }
    
-  // 冰冻升级选项
+// 冰冻升级选项
   if (iceSkill.value.level > 0 && iceSkill.value.level < 3) {
     const nextLevel = iceSkill.value.level + 1
     const desc = nextLevel === 2 ? '減速效果增強' : '範圍擴大'
@@ -226,7 +244,17 @@ function generateAvailableSkills(): void {
       isUnlock: false
     })
   }
-   
+  
+  // 天譴之龍解锁选项（守護蛇满级 + 閃電满级）
+  if (defenderSkill.value.level === 3 && lightningSkill.value.level === 3 && thunderDragonSkill.value.level === 0) {
+    availableSkills.value.push({
+      key: 'thunderDragon',
+      name: '天譴之龍',
+      desc: '召喚6隻天譴之龍，撞擊效果依次眩暈→停頓→連鎖雷擊',
+      isUnlock: true
+    })
+  }
+    
   // 填充分数+100选项到3个
   while (availableSkills.value.length < 3) {
     availableSkills.value.push({
@@ -257,6 +285,9 @@ function selectSkill(skillKey: string): void {
     } else {
       iceSkill.value.level++
     }
+  } else if (skillKey === 'thunderDragon') {
+    thunderDragonSkill.value.level = 1
+    thunderDragonSkill.value.unlocked = true
   }
   
   showSkillCards.value = false
@@ -270,7 +301,7 @@ function resumeFromLevelUp(): void {
   gameLoop()
 }
 
-function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | 'ice-field' | null {
+function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | 'ice-field' | 'thunder-dragon' | 'chain-lightning-warning' | 'chain-lightning-strike' | null {
   const x = (index - 1) % GRID_WIDTH
   const y = Math.floor((index - 1) / GRID_WIDTH)
 
@@ -316,7 +347,7 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
     }
   }
   
-  // 闪电效果渲染（最后，在最上层）
+  // 闪电效果渲染（在天譴之龍之前）
   if (lightningActive.value && lightningPosition.value && lightningPhase.value !== 'none') {
     const lx = lightningPosition.value.x
     const ly = lightningPosition.value.y
@@ -324,6 +355,21 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
     if (x >= lx && x < lx + lightningSize && y >= ly && y < ly + lightningSize) {
       if (lightningPhase.value === 'warning') return 'lightning-warning'
       if (lightningPhase.value === 'strike') return 'lightning-strike'
+    }
+  }
+  
+  // 天譴之龍渲染（在闪电之后，最上层）
+  for (const dragon of thunderDragons.value) {
+    if (dragon.position.x === x && dragon.position.y === y) return 'thunder-dragon'
+  }
+  
+  // 连锁雷击渲染（最上层，strike时白色覆盖在warning黄色上面）
+  if (chainLightningPosition.value && chainLightningPhase.value !== 'none') {
+    const clx = chainLightningPosition.value.x
+    const cly = chainLightningPosition.value.y
+    if (x >= clx && x < clx + 5 && y >= cly && y < cly + 5) {
+      if (chainLightningPhase.value === 'strike') return 'chain-lightning-strike'
+      if (chainLightningPhase.value === 'warning') return 'chain-lightning-warning'
     }
   }
   
@@ -473,14 +519,19 @@ function move(): void {
     food.value = generateFood([...snake.value, ...aiSnakes.value.flatMap(s => s.positions)])
   }
 
-  // 自动释放闪电技能（已解锁，CD 完毕）
-  if (lightningSkill.value.level > 0 && lightningSkill.value.cooldown <= 0 && !lightningActive.value) {
+  // 自动释放闪电技能（已解锁，CD 完毕，天譴之龍解鎖後不觸發）
+  if (lightningSkill.value.level > 0 && lightningSkill.value.cooldown <= 0 && !lightningActive.value && !thunderDragonSkill.value.unlocked) {
     activateLightning()
   }
   
   // 自动释放冰冻技能（已解锁，CD 完毕）
   if (iceSkill.value.level > 0 && iceSkill.value.cooldown <= 0 && !iceActive.value) {
     activateIce()
+  }
+  
+  // 自动释放天譴之龍技能（已解锁，CD 完毕）
+  if (thunderDragonSkill.value.unlocked && thunderDragonSkill.value.cooldown <= 0 && thunderDragons.value.length === 0) {
+    activateThunderDragon()
   }
 }
 
@@ -565,6 +616,184 @@ function activateIce(): void {
         if (iceCooldownTimer) {
           clearInterval(iceCooldownTimer)
           iceCooldownTimer = null
+        }
+      }
+    }, 100)
+  }, 3000)
+}
+
+function getThunderDragonTargetDirection(head: Position): Direction {
+  if (aiSnakes.value.length === 0) return 'RIGHT'
+  
+  let nearestTarget = aiSnakes.value[0]!
+  let minDist = Infinity
+  
+  for (const ai of aiSnakes.value) {
+    const aiHead = ai.positions[0]!
+    const dist = Math.abs(aiHead.x - head.x) + Math.abs(aiHead.y - head.y)
+    if (dist < minDist) {
+      minDist = dist
+      nearestTarget = ai
+    }
+  }
+  
+  const targetHead = nearestTarget.positions[0]!
+  const dx = targetHead.x - head.x
+  const dy = targetHead.y - head.y
+
+  const candidates: Direction[] = []
+  if (dy < 0) candidates.push('UP')
+  else if (dy > 0) candidates.push('DOWN')
+  if (dx < 0) candidates.push('LEFT')
+  else if (dx > 0) candidates.push('RIGHT')
+
+  if (candidates.length === 0) return 'RIGHT'
+  if (candidates.length === 1) return candidates[0]!
+
+  const opposites: Record<Direction, Direction> = {
+    UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT',
+  }
+
+  return candidates[0]!
+}
+
+function triggerChainLightning(targetAI: AISnake): void {
+  const targetHead = targetAI.positions[0]!
+  const chainSize = 5
+  const halfSize = Math.floor(chainSize / 2)
+  
+  for (const ai of aiSnakes.value) {
+    if (ai === targetAI) continue
+    const aiHead = ai.positions[0]!
+    if (Math.abs(aiHead.x - targetHead.x) <= halfSize && Math.abs(aiHead.y - targetHead.y) <= halfSize) {
+      ai.stunned = true
+      if (ai.stunTimer) clearTimeout(ai.stunTimer)
+      ai.stunTimer = setTimeout(() => {
+        ai.stunned = false
+        ai.paused = true
+        ai.pauseStepCount = 0
+        if (ai.pauseTimer) clearTimeout(ai.pauseTimer)
+        ai.pauseTimer = setTimeout(() => {
+          ai.paused = false
+          ai.pauseStepCount = 0
+        }, 1000)
+      }, 1000)
+    }
+  }
+  
+  playerSpeedMultiplier = 2.0
+  playerSpeedBoosted.value = true
+  if (playerSpeedBoostTimer) clearTimeout(playerSpeedBoostTimer)
+  playerSpeedBoostTimer = setTimeout(() => {
+    playerSpeedMultiplier = 1.0
+    playerSpeedBoosted.value = false
+  }, 2000)
+  
+  chainLightningPosition.value = { x: targetHead.x - 2, y: targetHead.y - 2 }
+  chainLightningPhase.value = 'warning'
+  
+  if (chainWarningTimer) clearTimeout(chainWarningTimer)
+  chainWarningTimer = setTimeout(() => {
+    chainLightningPhase.value = 'strike'
+    if (chainStrikeTimer) clearTimeout(chainStrikeTimer)
+    chainStrikeTimer = setTimeout(() => {
+      chainLightningPosition.value = null
+      chainLightningPhase.value = 'none'
+    }, 300)
+  }, 2000)
+}
+
+function moveThunderDragon(index: number): void {
+  if (gameStatus.value !== 'playing' || !thunderDragons.value[index]) return
+  
+  const dragon = thunderDragons.value[index]
+  const head = snake.value[0]!
+  
+  dragon.direction = getThunderDragonTargetDirection(dragon.position)
+  
+  const next = { ...dragon.position }
+  switch (dragon.direction) {
+    case 'UP':    next.y--; break
+    case 'DOWN':  next.y++; break
+    case 'LEFT':  next.x--; break
+    case 'RIGHT': next.x++; break
+  }
+  next.x = ((next.x % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH
+  next.y = ((next.y % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
+  dragon.position = next
+  
+  for (let i = 0; i < aiSnakes.value.length; i++) {
+    const ai = aiSnakes.value[i]
+    if (!ai) continue
+    const aiHead = ai.positions[0]!
+    if (dragon.position.x === aiHead.x && dragon.position.y === aiHead.y) {
+      const key = `${index}-${i}`
+      const hitCount = (aiHitCounts.value.get(key) || 0) + 1
+      aiHitCounts.value.set(key, hitCount)
+      
+      const effectType = hitCount % 3
+      
+      if (effectType === 1) {
+        ai.stunned = true
+        if (ai.stunTimer) clearTimeout(ai.stunTimer)
+        ai.stunTimer = setTimeout(() => {
+          ai.stunned = false
+        }, 2000)
+      } else if (effectType === 2) {
+        ai.paused = true
+        ai.pauseStepCount = 0
+        if (ai.pauseTimer) clearTimeout(ai.pauseTimer)
+        ai.pauseTimer = setTimeout(() => {
+          ai.paused = false
+          ai.pauseStepCount = 0
+        }, 3000)
+      } else if (effectType === 0) {
+        triggerChainLightning(ai)
+      }
+      break
+    }
+  }
+}
+
+function activateThunderDragon(): void {
+  if (thunderDragonSkill.value.cooldown > 0 || thunderDragons.value.length > 0) return
+  
+  const head = snake.value[0]!
+  thunderDragons.value = []
+  
+  for (let i = 0; i < 6; i++) {
+    let pos: Position
+    if (i < 3) {
+      pos = { x: head.x - (i + 1), y: head.y }
+    } else {
+      pos = { x: head.x + (i - 2), y: head.y }
+    }
+    pos.x = ((pos.x % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH
+    thunderDragons.value.push({ position: pos, direction: 'RIGHT' })
+  }
+  
+  const dragonSpeed = BASE_SPEED / 2.0
+  for (let i = 0; i < 6; i++) {
+    thunderDragonTimers.push(setInterval(() => moveThunderDragon(i), dragonSpeed))
+  }
+  
+  setTimeout(() => {
+    for (const timer of thunderDragonTimers) {
+      clearInterval(timer)
+    }
+    thunderDragonTimers = []
+    thunderDragons.value = []
+    aiHitCounts.value.clear()
+    
+    thunderDragonSkill.value.cooldown = THUNDER_DRAGON_COOLDOWN
+    if (thunderCooldownTimer) clearInterval(thunderCooldownTimer)
+    thunderCooldownTimer = setInterval(() => {
+      thunderDragonSkill.value.cooldown -= 100
+      if (thunderDragonSkill.value.cooldown <= 0) {
+        thunderDragonSkill.value.cooldown = 0
+        if (thunderCooldownTimer) {
+          clearInterval(thunderCooldownTimer)
+          thunderCooldownTimer = null
         }
       }
     }, 100)
@@ -784,6 +1013,7 @@ function moveDefenderSnake2(): void {
 }
 
 function activateDefender(): void {
+  if (thunderDragonSkill.value.unlocked) return
   if (defenderActive.value || defenderCooldown.value || gameStatus.value !== 'playing') return
 
   const head = snake.value[0]!
@@ -887,6 +1117,30 @@ function resetGame(): void {
   if (defenderCooldownTimer !== null) {
     clearInterval(defenderCooldownTimer)
     defenderCooldownTimer = null
+  }
+  
+  thunderDragonSkill.value.level = 0
+  thunderDragonSkill.value.unlocked = false
+  thunderDragonSkill.value.cooldown = 0
+  if (thunderCooldownTimer !== null) {
+    clearInterval(thunderCooldownTimer)
+    thunderCooldownTimer = null
+  }
+  for (const timer of thunderDragonTimers) {
+    clearInterval(timer)
+  }
+  thunderDragonTimers = []
+  thunderDragons.value = []
+  aiHitCounts.value.clear()
+  chainLightningPosition.value = null
+  chainLightningPhase.value = 'none'
+  if (chainWarningTimer !== null) {
+    clearTimeout(chainWarningTimer)
+    chainWarningTimer = null
+  }
+  if (chainStrikeTimer !== null) {
+    clearTimeout(chainStrikeTimer)
+    chainStrikeTimer = null
   }
   
   if (gameTimer !== null) clearInterval(gameTimer)
@@ -1139,9 +1393,9 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
         </div>
       </div>
       <div class="skills-container">
-        <div class="skill-icon" :class="{ cooling: defenderCooldown > 0 }">
+        <div v-if="!thunderDragonSkill.unlocked" class="skill-icon" :class="{ cooling: defenderCooldown > 0 }">
           <div class="skill-content">
-            <span class="snake-emoji">🐍</span>
+            <img src="@/image/snake.png" alt="守護蛇" class="skill-img" />
             <span class="skill-level">{{ defenderSkill.level }}</span>
           </div>
           <svg class="cooldown-ring" viewBox="0 0 36 36">
@@ -1158,9 +1412,9 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
           </svg>
         </div>
 
-        <div v-if="lightningSkill.level > 0" class="skill-icon" :class="{ cooling: lightningSkill.cooldown > 0 }">
+        <div v-if="lightningSkill.level > 0 && !thunderDragonSkill.unlocked" class="skill-icon" :class="{ cooling: lightningSkill.cooldown > 0 }">
           <div class="skill-content">
-            <span class="lightning-emoji">⚡</span>
+            <img src="@/image/flash.png" alt="閃電" class="skill-img" />
             <span class="skill-level">{{ lightningSkill.level }}</span>
           </div>
           <svg class="cooldown-ring" viewBox="0 0 36 36">
@@ -1179,7 +1433,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
         <div v-if="iceSkill.level > 0" class="skill-icon" :class="{ cooling: iceSkill.cooldown > 0 }">
           <div class="skill-content">
-            <span class="ice-emoji">❄️</span>
+            <img src="@/image/ice.png" alt="冰凍" class="skill-img" />
             <span class="skill-level">{{ iceSkill.level }}</span>
           </div>
           <svg class="cooldown-ring" viewBox="0 0 36 36">
@@ -1191,6 +1445,25 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
               r="16"
               :style="{ 
                 strokeDashoffset: iceSkill.cooldown > 0 ? (iceSkill.cooldown / ICE_COOLDOWN) * 100 : 0 
+              }"
+            />
+          </svg>
+        </div>
+
+        <div v-if="thunderDragonSkill.unlocked" class="skill-icon" :class="{ cooling: thunderDragonSkill.cooldown > 0 }">
+          <div class="skill-content">
+            <img src="@/image/flash.png" alt="天譴之龍" class="skill-img" />
+            <span class="skill-level">{{ thunderDragonSkill.level }}</span>
+          </div>
+          <svg class="cooldown-ring" viewBox="0 0 36 36">
+            <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+            <circle 
+              class="cooldown-progress" 
+              cx="18" 
+              cy="18" 
+              r="16"
+              :style="{ 
+                strokeDashoffset: thunderDragonSkill.cooldown > 0 ? (thunderDragonSkill.cooldown / THUNDER_DRAGON_COOLDOWN) * 100 : 0 
               }"
             />
           </svg>
@@ -1300,6 +1573,12 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 .snake-emoji {
   font-size: 24px;
+}
+
+.skill-img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .skill-level {
@@ -1440,8 +1719,22 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   animation: lightning-flash 0.15s ease-in-out 2;
 }
 
+.cell.chain-lightning-warning {
+  background-color: #ffeaa7;
+}
+
+.cell.chain-lightning-strike {
+  background-color: #fff;
+  animation: lightning-flash 0.15s ease-in-out 2;
+}
+
 .cell.ice-field {
   background-color: rgba(173, 216, 230, 0.5);
+}
+
+.cell.thunder-dragon {
+  background-color: #f1c40f;
+  box-shadow: 0 0 10px 4px #f39c12;
 }
 
 @keyframes lightning-flash {
