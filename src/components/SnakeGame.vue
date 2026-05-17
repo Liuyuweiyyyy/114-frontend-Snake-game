@@ -62,10 +62,15 @@ const thunderDragonSkill = ref({
   unlocked: false,
   cooldown: 0
 })
-const chainLightningPosition = ref<Position | null>(null)
-const chainLightningPhase = ref<'none' | 'warning' | 'strike'>('none')
-let chainWarningTimer: ReturnType<typeof setTimeout> | null = null
-let chainStrikeTimer: ReturnType<typeof setTimeout> | null = null
+interface ChainLightning {
+  key: string
+  position: Position
+  phase: 'warning' | 'strike'
+  warningTimer: ReturnType<typeof setTimeout> | null
+  strikeTimer: ReturnType<typeof setTimeout> | null
+}
+
+const chainLightnings = ref<ChainLightning[]>([])
 
 const ICE_COOLDOWN = 5000
 const iceActive = ref(false)
@@ -250,7 +255,7 @@ function generateAvailableSkills(): void {
     availableSkills.value.push({
       key: 'thunderDragon',
       name: '天譴之龍',
-      desc: '召喚6隻天譴之龍，撞擊效果依次眩暈→停頓→<span class="tooltip-text-chain">連續雷擊</span>',
+      desc: '召喚6隻天譴之龍，撞擊效果依次眩暈→<span class="tooltip-text">停頓</span>→<span class="tooltip-text-chain">連續雷擊</span>',
       isUnlock: true
     })
   }
@@ -364,12 +369,10 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
   }
   
   // 连锁雷击渲染（最上层，strike时白色覆盖在warning黄色上面）
-  if (chainLightningPosition.value && chainLightningPhase.value !== 'none') {
-    const clx = chainLightningPosition.value.x
-    const cly = chainLightningPosition.value.y
-    if (x >= clx && x < clx + 5 && y >= cly && y < cly + 5) {
-      if (chainLightningPhase.value === 'strike') return 'chain-lightning-strike'
-      if (chainLightningPhase.value === 'warning') return 'chain-lightning-warning'
+  for (const cl of chainLightnings.value) {
+    if (x >= cl.position.x && x < cl.position.x + 5 && y >= cl.position.y && y < cl.position.y + 5) {
+      if (cl.phase === 'strike') return 'chain-lightning-strike'
+      if (cl.phase === 'warning') return 'chain-lightning-warning'
     }
   }
   
@@ -506,6 +509,12 @@ function move(): void {
     const prevLevel = Math.floor((eatenCount.value - 1) / 5)
     const currentLevel = Math.floor(eatenCount.value / 5)
     if (currentLevel > prevLevel && gameTimer !== null) {
+      playerSpeedMultiplier = 1.0
+      playerSpeedBoosted.value = false
+      if (playerSpeedBoostTimer) {
+        clearTimeout(playerSpeedBoostTimer)
+        playerSpeedBoostTimer = null
+      }
       clearInterval(gameTimer)
       gameTimer = setInterval(move, currentSpeed())
       gameStatus.value = 'levelup'
@@ -657,10 +666,11 @@ function getThunderDragonTargetDirection(head: Position): Direction {
   return candidates[0]!
 }
 
-function triggerChainLightning(targetAI: AISnake): void {
+function triggerChainLightning(targetAI: AISnake, dragonIndex: number): void {
   const targetHead = targetAI.positions[0]!
   const chainSize = 5
   const halfSize = Math.floor(chainSize / 2)
+  const targetKey = `dragon-${dragonIndex}`
   
   for (const ai of aiSnakes.value) {
     if (ai === targetAI) continue
@@ -689,18 +699,34 @@ function triggerChainLightning(targetAI: AISnake): void {
     playerSpeedBoosted.value = false
   }, 2000)
   
-  chainLightningPosition.value = { x: targetHead.x - 2, y: targetHead.y - 2 }
-  chainLightningPhase.value = 'warning'
-  
-  if (chainWarningTimer) clearTimeout(chainWarningTimer)
-  chainWarningTimer = setTimeout(() => {
-    chainLightningPhase.value = 'strike'
-    if (chainStrikeTimer) clearTimeout(chainStrikeTimer)
-    chainStrikeTimer = setTimeout(() => {
-      chainLightningPosition.value = null
-      chainLightningPhase.value = 'none'
-    }, 300)
+  const warningTimer = setTimeout(() => {
+    const cl = chainLightnings.value.find(c => c.key === targetKey)
+    if (cl) {
+      cl.phase = 'strike'
+      cl.strikeTimer = setTimeout(() => {
+        const idx = chainLightnings.value.indexOf(cl)
+        if (idx > -1) chainLightnings.value.splice(idx, 1)
+      }, 300)
+    }
   }, 2000)
+  
+  const existing = chainLightnings.value.find(c => c.key === targetKey)
+  if (existing) {
+    if (existing.warningTimer) clearTimeout(existing.warningTimer)
+    if (existing.strikeTimer) clearTimeout(existing.strikeTimer)
+    existing.position = { x: targetHead.x - 2, y: targetHead.y - 2 }
+    existing.phase = 'warning'
+    existing.warningTimer = warningTimer
+    existing.strikeTimer = null
+  } else {
+    chainLightnings.value.push({
+      key: targetKey,
+      position: { x: targetHead.x - 2, y: targetHead.y - 2 },
+      phase: 'warning',
+      warningTimer,
+      strikeTimer: null
+    })
+  }
 }
 
 function moveThunderDragon(index: number): void {
@@ -748,7 +774,7 @@ function moveThunderDragon(index: number): void {
           ai.pauseStepCount = 0
         }, 3000)
       } else if (effectType === 0) {
-        triggerChainLightning(ai)
+        triggerChainLightning(ai, index)
       }
       break
     }
@@ -1076,6 +1102,7 @@ function gameLoop(): void {
 }
 
 function resetGame(): void {
+  playerSpeedMultiplier = 1.0
   playerSpeedBoosted.value = false
   iceActive.value = false
   
@@ -1132,16 +1159,11 @@ function resetGame(): void {
   thunderDragonTimers = []
   thunderDragons.value = []
   aiHitCounts.value.clear()
-  chainLightningPosition.value = null
-  chainLightningPhase.value = 'none'
-  if (chainWarningTimer !== null) {
-    clearTimeout(chainWarningTimer)
-    chainWarningTimer = null
+  for (const cl of chainLightnings.value) {
+    if (cl.warningTimer) clearTimeout(cl.warningTimer)
+    if (cl.strikeTimer) clearTimeout(cl.strikeTimer)
   }
-  if (chainStrikeTimer !== null) {
-    clearTimeout(chainStrikeTimer)
-    chainStrikeTimer = null
-  }
+  chainLightnings.value = []
   
   if (gameTimer !== null) clearInterval(gameTimer)
   for (const timer of aiTimers) {
@@ -1212,6 +1234,14 @@ function togglePause(): void {
       clearTimeout(lightningStrikeTimer)
       lightningStrikeTimer = null
     }
+    if (iceCooldownTimer !== null) {
+      clearInterval(iceCooldownTimer)
+      iceCooldownTimer = null
+    }
+    if (thunderCooldownTimer !== null) {
+      clearInterval(thunderCooldownTimer)
+      thunderCooldownTimer = null
+    }
   } else if (gameStatus.value === 'paused') {
     gameStatus.value = 'playing'
     gameLoop()
@@ -1242,6 +1272,32 @@ function togglePause(): void {
         }
       }, 100)
     }
+    // 如果冰冻冷却中，重新启动冷却计时器
+    if (iceSkill.value.cooldown > 0 && iceCooldownTimer === null) {
+      iceCooldownTimer = setInterval(() => {
+        iceSkill.value.cooldown -= 100
+        if (iceSkill.value.cooldown <= 0) {
+          iceSkill.value.cooldown = 0
+          if (iceCooldownTimer) {
+            clearInterval(iceCooldownTimer)
+            iceCooldownTimer = null
+          }
+        }
+      }, 100)
+    }
+    // 如果天譴之龍冷却中，重新启动冷却计时器
+    if (thunderDragonSkill.value.cooldown > 0 && thunderCooldownTimer === null) {
+      thunderCooldownTimer = setInterval(() => {
+        thunderDragonSkill.value.cooldown -= 100
+        if (thunderDragonSkill.value.cooldown <= 0) {
+          thunderDragonSkill.value.cooldown = 0
+          if (thunderCooldownTimer) {
+            clearInterval(thunderCooldownTimer)
+            thunderCooldownTimer = null
+          }
+        }
+      }, 100)
+    }
   }
 }
 
@@ -1258,12 +1314,6 @@ function handleKeydown(e: KeyboardEvent): void {
         startGame()
       }
       return
-    }
-    if (isArrow) {
-      e.preventDefault()
-      saveScore()
-      startGame()
-      pendingDirection = ({ ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' } as Record<string, Direction>)[e.key] ?? null
     }
     return
   }
@@ -1452,7 +1502,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
         <div v-if="thunderDragonSkill.unlocked" class="skill-icon" :class="{ cooling: thunderDragonSkill.cooldown > 0 }">
           <div class="skill-content">
-            <img src="@/image/flash.png" alt="天譴之龍" class="skill-img" />
+            <img src="@/image/flash_dragon.png" alt="天譴之龍" class="skill-img" />
             <span class="skill-level">{{ thunderDragonSkill.level }}</span>
           </div>
           <svg class="cooldown-ring" viewBox="0 0 36 36">
