@@ -34,6 +34,8 @@ interface AISnake {
   slowed: boolean
   slowMultiplier: number
   slowTimer: ReturnType<typeof setTimeout> | null
+  frozen: boolean
+  frozenTimer: ReturnType<typeof setTimeout> | null
 }
 
 const aiSnakes = ref<AISnake[]>([])
@@ -71,6 +73,24 @@ interface ChainLightning {
 }
 
 const chainLightnings = ref<ChainLightning[]>([])
+
+// 極寒領主技能
+const FROST_LORD_COOLDOWN = 5000
+const frostLordSkill = ref({ level: 0, unlocked: false, cooldown: 0 })
+let frostLordCooldownTimer: ReturnType<typeof setInterval> | null = null
+
+const frostLordActive = ref(false)
+let frostLordDurationTimer: ReturnType<typeof setTimeout> | null = null
+
+const frostLordSnake = ref<Position[]>([])
+let frostLordAngle = 0
+let frostLordMoveTimer: ReturnType<typeof setInterval> | null = null
+
+interface FrostLordPath {
+  position: Position
+  timer: ReturnType<typeof setTimeout>
+}
+const frostLordPath = ref<FrostLordPath[]>([])
 
 const ICE_COOLDOWN = 5000
 const iceActive = ref(false)
@@ -185,7 +205,7 @@ function generateAvailableSkills(): void {
   }
   
   // 守护蛇升级选项（天譴之龍解鎖後隱藏）
-  if (defenderSkill.value.level < 3 && !thunderDragonSkill.value.unlocked) {
+  if (defenderSkill.value.level < 3 && !thunderDragonSkill.value.unlocked && !frostLordSkill.value.unlocked) {
     const nextLevel = defenderSkill.value.level + 1
     let desc = ''
     if (nextLevel === 2) {
@@ -228,8 +248,8 @@ function generateAvailableSkills(): void {
     })
 }
    
-  // 冰冻解锁选项
-  if (iceSkill.value.level === 0) {
+// 冰冻解锁选项（極寒領主解鎖後隱藏）
+  if (iceSkill.value.level === 0 && !frostLordSkill.value.unlocked) {
     availableSkills.value.push({
       key: 'ice',
       name: '冰凍',
@@ -237,9 +257,9 @@ function generateAvailableSkills(): void {
       isUnlock: true
     })
   }
-   
-// 冰冻升级选项
-  if (iceSkill.value.level > 0 && iceSkill.value.level < 3) {
+    
+// 冰冻升级选项（極寒領主解鎖後隱藏）
+  if (iceSkill.value.level > 0 && iceSkill.value.level < 3 && !frostLordSkill.value.unlocked) {
     const nextLevel = iceSkill.value.level + 1
     const desc = nextLevel === 2 ? '減速效果增強' : '範圍擴大'
     availableSkills.value.push({
@@ -256,6 +276,16 @@ function generateAvailableSkills(): void {
       key: 'thunderDragon',
       name: '天譴之龍',
       desc: '召喚6隻天譴之龍，撞擊效果依次眩暈→<span class="tooltip-text">停頓</span>→<span class="tooltip-text-chain">連續雷擊</span>',
+      isUnlock: true
+    })
+  }
+  
+  // 極寒領主解锁选项（守護蛇满级 + 冰凍满级）
+  if (defenderSkill.value.level === 3 && iceSkill.value.level === 3 && frostLordSkill.value.level === 0) {
+    availableSkills.value.push({
+      key: 'frostLord',
+      name: '極寒領主',
+      desc: '召喚極寒領主，行進路線會形成冰路，撞到敵人會造成冰凍',
       isUnlock: true
     })
   }
@@ -293,6 +323,12 @@ function selectSkill(skillKey: string): void {
   } else if (skillKey === 'thunderDragon') {
     thunderDragonSkill.value.level = 1
     thunderDragonSkill.value.unlocked = true
+  } else if (skillKey === 'frostLord') {
+    frostLordSkill.value.level = 1
+    frostLordSkill.value.unlocked = true
+    frostLordSkill.value.cooldown = 0
+    iceActive.value = false
+    if (iceDurationTimer) clearTimeout(iceDurationTimer)
   }
   
   showSkillCards.value = false
@@ -342,16 +378,38 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
   
   if (food.value.x === x && food.value.y === y) return 'food'
   
+  // 极寒领主淡蓝色蛇头（冰冻效果上面，食物下面）
+  if (frostLordSnake.value.length > 0) {
+    const head = frostLordSnake.value[0]!
+    if (head.x === x && head.y === y) {
+      return 'frost-lord-head'
+    }
+  }
+  
+  // 极寒领主白色路径（冰冻效果上面，淡蓝色蛇下面）
+  for (const path of frostLordPath.value) {
+    if (path.position.x === x && path.position.y === y) return 'frost-lord-path'
+  }
+  
   // 冰冻效果渲染（跟随玩家蛇头，在食物之后）
   if (iceActive.value) {
     const iceSize = iceSkill.value.level >= 3 ? 5 : 3
     const halfSize = Math.floor(iceSize / 2)
     if (x >= head.x - halfSize && x <= head.x + halfSize &&
         y >= head.y - halfSize && y <= head.y + halfSize) {
-      return 'ice-field'
+return 'ice-field'
     }
   }
   
+  // 极寒领主减速范围（5×5，以蛇头为中心）
+  if (frostLordActive.value) {
+    const frostHalfSize = 2
+    if (x >= head.x - frostHalfSize && x <= head.x + frostHalfSize &&
+        y >= head.y - frostHalfSize && y <= head.y + frostHalfSize) {
+      return 'frost-lord-field'
+    }
+  }
+    
   // 闪电效果渲染（在天譴之龍之前）
   if (lightningActive.value && lightningPosition.value && lightningPhase.value !== 'none') {
     const lx = lightningPosition.value.x
@@ -398,6 +456,8 @@ function createAISnake(): AISnake {
     slowed: false,
     slowMultiplier: 1.0,
     slowTimer: null,
+    frozen: false,
+    frozenTimer: null,
   }
 }
 
@@ -541,6 +601,132 @@ function move(): void {
   // 自动释放天譴之龍技能（已解锁，CD 完毕）
   if (thunderDragonSkill.value.unlocked && thunderDragonSkill.value.cooldown <= 0 && thunderDragons.value.length === 0) {
     activateThunderDragon()
+  }
+  
+  // 自动释放极寒领主技能（已解锁，CD 完毕，未激活）
+  console.log('move check frostLord', { 
+    gameStatus: gameStatus.value,
+    unlocked: frostLordSkill.value.unlocked, 
+    cooldown: frostLordSkill.value.cooldown,
+    active: frostLordActive.value 
+  })
+  if (frostLordSkill.value.unlocked && frostLordSkill.value.cooldown <= 0 && !frostLordActive.value) {
+    activateFrostLord()
+  }
+}
+
+function activateFrostLord(): void {
+  console.log('activateFrostLord called', { 
+    unlocked: frostLordSkill.value.unlocked, 
+    cooldown: frostLordSkill.value.cooldown,
+    active: frostLordActive.value 
+  })
+  if (frostLordActive.value || frostLordSkill.value.cooldown > 0) return
+  
+  const head = snake.value[0]!
+  const radius = 3
+  
+  frostLordAngle = 0
+  frostLordSnake.value = []
+  for (let i = 0; i < 5; i++) {
+    const angle = frostLordAngle - (i * Math.PI / 4)
+    const px = Math.round(head.x + radius * Math.cos(angle))
+    const py = Math.round(head.y + radius * Math.sin(angle))
+    frostLordSnake.value.push({
+      x: ((px % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH,
+      y: ((py % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
+    })
+  }
+  
+  frostLordActive.value = true
+  
+  if (frostLordDurationTimer) clearTimeout(frostLordDurationTimer)
+  frostLordDurationTimer = setTimeout(() => {
+    deactivateFrostLord()
+  }, 3000)
+  
+  if (frostLordMoveTimer) clearInterval(frostLordMoveTimer)
+  frostLordMoveTimer = setInterval(moveFrostLordSnake, BASE_SPEED)
+}
+
+function deactivateFrostLord(): void {
+  frostLordActive.value = false
+  frostLordSnake.value = []
+  // 冰路保留，让每格独立3秒后消失
+  
+  if (frostLordMoveTimer) {
+    clearInterval(frostLordMoveTimer)
+    frostLordMoveTimer = null
+  }
+  if (frostLordDurationTimer) {
+    clearTimeout(frostLordDurationTimer)
+    frostLordDurationTimer = null
+  }
+  
+  frostLordSkill.value.cooldown = FROST_LORD_COOLDOWN
+  if (frostLordCooldownTimer) clearInterval(frostLordCooldownTimer)
+  frostLordCooldownTimer = setInterval(() => {
+    frostLordSkill.value.cooldown -= 100
+    if (frostLordSkill.value.cooldown <= 0) {
+      frostLordSkill.value.cooldown = 0
+      if (frostLordCooldownTimer) {
+        clearInterval(frostLordCooldownTimer)
+        frostLordCooldownTimer = null
+      }
+    }
+  }, 100)
+}
+
+function moveFrostLordSnake(): void {
+  console.log('moveFrostLordSnake called', { snakeLength: frostLordSnake.value.length, pathLength: frostLordPath.value.length })
+  if (gameStatus.value !== 'playing' || !frostLordActive.value) return
+  
+  const head = snake.value[0]!
+  const radius = 3
+  
+  frostLordAngle -= Math.PI / 4
+  
+  const newPositions: Position[] = []
+  for (let i = 0; i < 5; i++) {
+    const angle = frostLordAngle - (i * Math.PI / 4)
+    const px = Math.round(head.x + radius * Math.cos(angle))
+    const py = Math.round(head.y + radius * Math.sin(angle))
+    newPositions.push({
+      x: ((px % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH,
+      y: ((py % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
+    })
+  }
+  
+  const oldHead = frostLordSnake.value[0]
+  console.log('Recording path', { oldHead, currentPathLength: frostLordPath.value.length })
+  if (oldHead) {
+    const pathEntry = { 
+      position: { ...oldHead },
+      timer: setTimeout(() => {
+        const idx = frostLordPath.value.findIndex(p => 
+          p.position.x === oldHead.x && p.position.y === oldHead.y
+        )
+        if (idx > -1) frostLordPath.value.splice(idx, 1)
+      }, 3000)
+    }
+    frostLordPath.value.push(pathEntry)
+    console.log('Path added, new length:', frostLordPath.value.length)
+  }
+  
+  frostLordSnake.value = newPositions
+  
+  for (const ai of aiSnakes.value) {
+    const aiHead = ai.positions[0]!
+    for (const seg of frostLordSnake.value) {
+      if (seg.x === aiHead.x && seg.y === aiHead.y) {
+        ai.frozen = true
+        if (ai.frozenTimer) clearTimeout(ai.frozenTimer)
+        ai.frozenTimer = setTimeout(() => {
+          ai.frozen = false
+        }, 5000)
+        break
+      }
+    }
   }
 }
 
@@ -729,6 +915,15 @@ function triggerChainLightning(targetAI: AISnake, dragonIndex: number): void {
   }
 }
 
+function changeDirection(newDir: Direction): void {
+  const opposites: Record<Direction, Direction> = {
+    UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT',
+  }
+  if (newDir !== opposites[direction.value]) {
+    pendingDirection = newDir
+  }
+}
+
 function moveThunderDragon(index: number): void {
   if (gameStatus.value !== 'playing' || !thunderDragons.value[index]) return
   
@@ -781,73 +976,18 @@ function moveThunderDragon(index: number): void {
   }
 }
 
-function activateThunderDragon(): void {
-  if (thunderDragonSkill.value.cooldown > 0 || thunderDragons.value.length > 0) return
-  
-  const head = snake.value[0]!
-  thunderDragons.value = []
-  
-  for (let i = 0; i < 6; i++) {
-    let pos: Position
-    if (i < 3) {
-      pos = { x: head.x - (i + 1), y: head.y }
-    } else {
-      pos = { x: head.x + (i - 2), y: head.y }
-    }
-    pos.x = ((pos.x % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH
-    thunderDragons.value.push({ position: pos, direction: 'RIGHT' })
-  }
-  
-  const dragonSpeed = BASE_SPEED / 2.0
-  for (let i = 0; i < 6; i++) {
-    thunderDragonTimers.push(setInterval(() => moveThunderDragon(i), dragonSpeed))
-  }
-  
-  setTimeout(() => {
-    for (const timer of thunderDragonTimers) {
-      clearInterval(timer)
-    }
-    thunderDragonTimers = []
-    thunderDragons.value = []
-    aiHitCounts.value.clear()
-    
-    thunderDragonSkill.value.cooldown = THUNDER_DRAGON_COOLDOWN
-    if (thunderCooldownTimer) clearInterval(thunderCooldownTimer)
-    thunderCooldownTimer = setInterval(() => {
-      thunderDragonSkill.value.cooldown -= 100
-      if (thunderDragonSkill.value.cooldown <= 0) {
-        thunderDragonSkill.value.cooldown = 0
-        if (thunderCooldownTimer) {
-          clearInterval(thunderCooldownTimer)
-          thunderCooldownTimer = null
-        }
-      }
-    }, 100)
-  }, 3000)
-}
-
-function changeDirection(newDir: Direction): void {
-  const opposites: Record<Direction, Direction> = {
-    UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT',
-  }
-  if (newDir !== opposites[direction.value]) {
-    pendingDirection = newDir
-  }
-}
-
 function moveAISnake(index: number): void {
   if (gameStatus.value !== 'playing') return
   
   const ai = aiSnakes.value[index]
   if(!ai)  return
   
-  // 冰冻减速逻辑（移到眩晕检查之前，这样眩晕时也能减速）
+  // 冰冻减速逻辑
   if (iceActive.value) {
     const playerHead = snake.value[0]!
     const iceSize = iceSkill.value.level >= 3 ? 5 : 3
     const halfSize = Math.floor(iceSize / 2)
 
-    // 检查 AI 蛇任意部位是否在冰冻范围内
     const inIceRange = ai.positions.some(seg => {
       const dx = Math.abs(seg.x - playerHead.x)
       const dy = Math.abs(seg.y - playerHead.y)
@@ -863,6 +1003,29 @@ function moveAISnake(index: number): void {
       }
     } else if (ai.slowed && !ai.slowTimer) {
       ai.slowMultiplier = iceSkill.value.level >= 2 ? 0.7 : 0.8
+      ai.slowTimer = setTimeout(() => {
+        ai.slowMultiplier = 1.0
+        ai.slowed = false
+        ai.slowTimer = null
+      }, 3000)
+    }
+  }
+  
+  // 极寒领主范围减速
+  if (frostLordActive.value) {
+    const playerHead = snake.value[0]!
+    const inRange = ai.positions.some(seg => {
+      return Math.abs(seg.x - playerHead.x) <= 2 && Math.abs(seg.y - playerHead.y) <= 2
+    })
+    if (inRange) {
+      ai.slowMultiplier = 0.5
+      ai.slowed = true
+      if (ai.slowTimer) {
+        clearTimeout(ai.slowTimer)
+        ai.slowTimer = null
+      }
+    } else if (ai.slowed && !ai.slowTimer) {
+      ai.slowMultiplier = 0.7
       ai.slowTimer = setTimeout(() => {
         ai.slowMultiplier = 1.0
         ai.slowed = false
@@ -888,7 +1051,22 @@ function moveAISnake(index: number): void {
   const newSpeed = currentSpeed() / AI_SPEED_MULTIPLIER / ai.slowMultiplier
   aiTimers[index] = setInterval(() => moveAISnake(index), newSpeed)
 
-  ai.direction = getAIDirection(ai.positions, food.value, ai.direction)
+  // 白色路径上无法转向前辑
+  const aiHead = ai.positions[0]!
+  const onPath = frostLordPath.value.some(path => 
+    path.position.x === aiHead.x && path.position.y === aiHead.y
+  )
+  if (onPath) {
+    // 保持原方向，不调用 getAIDirection
+  } else {
+    ai.direction = getAIDirection(ai.positions, food.value, ai.direction)
+  }
+  
+  // 冰冻状态（无法移动）
+  if (ai.frozen) {
+    return
+  }
+
   const aiResult = moveSnake(ai.positions, food.value, ai.direction, false)
 
   if (aiResult.ate) {
@@ -1039,7 +1217,7 @@ function moveDefenderSnake2(): void {
 }
 
 function activateDefender(): void {
-  if (thunderDragonSkill.value.unlocked) return
+  if (thunderDragonSkill.value.unlocked || frostLordSkill.value.unlocked) return
   if (defenderActive.value || defenderCooldown.value || gameStatus.value !== 'playing') return
 
   const head = snake.value[0]!
@@ -1106,10 +1284,10 @@ function resetGame(): void {
   playerSpeedBoosted.value = false
   iceActive.value = false
   
-  defenderSkill.value.level = 1
+  defenderSkill.value.level = 3
   lightningSkill.value.level = 0
   lightningSkill.value.cooldown = 0
-  iceSkill.value.level = 0
+  iceSkill.value.level = 3
   iceSkill.value.cooldown = 0
   
   lightningActive.value = false
@@ -1164,6 +1342,23 @@ function resetGame(): void {
     if (cl.strikeTimer) clearTimeout(cl.strikeTimer)
   }
   chainLightnings.value = []
+  
+  frostLordSkill.value.level = 0
+  frostLordSkill.value.unlocked = false
+  frostLordSkill.value.cooldown = 0
+  if (frostLordCooldownTimer) clearInterval(frostLordCooldownTimer)
+  frostLordCooldownTimer = null
+  
+  frostLordActive.value = false
+  if (frostLordDurationTimer) clearTimeout(frostLordDurationTimer)
+  frostLordDurationTimer = null
+  if (frostLordMoveTimer) clearInterval(frostLordMoveTimer)
+  frostLordMoveTimer = null
+  frostLordSnake.value = []
+  for (const path of frostLordPath.value) {
+    clearTimeout(path.timer)
+  }
+  frostLordPath.value = []
   
   if (gameTimer !== null) clearInterval(gameTimer)
   for (const timer of aiTimers) {
@@ -1242,6 +1437,10 @@ function togglePause(): void {
       clearInterval(thunderCooldownTimer)
       thunderCooldownTimer = null
     }
+    if (frostLordCooldownTimer !== null) {
+      clearInterval(frostLordCooldownTimer)
+      frostLordCooldownTimer = null
+    }
   } else if (gameStatus.value === 'paused') {
     gameStatus.value = 'playing'
     gameLoop()
@@ -1294,6 +1493,19 @@ function togglePause(): void {
           if (thunderCooldownTimer) {
             clearInterval(thunderCooldownTimer)
             thunderCooldownTimer = null
+          }
+        }
+      }, 100)
+    }
+    // 如果极寒领主冷却中，重新启动冷却计时器
+    if (frostLordSkill.value.cooldown > 0 && frostLordCooldownTimer === null) {
+      frostLordCooldownTimer = setInterval(() => {
+        frostLordSkill.value.cooldown -= 100
+        if (frostLordSkill.value.cooldown <= 0) {
+          frostLordSkill.value.cooldown = 0
+          if (frostLordCooldownTimer) {
+            clearInterval(frostLordCooldownTimer)
+            frostLordCooldownTimer = null
           }
         }
       }, 100)
@@ -1443,7 +1655,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
         </div>
       </div>
       <div class="skills-container">
-        <div v-if="!thunderDragonSkill.unlocked" class="skill-icon" :class="{ cooling: defenderCooldown > 0 }">
+        <div v-if="!thunderDragonSkill.unlocked && !frostLordSkill.unlocked" class="skill-icon" :class="{ cooling: defenderCooldown > 0 }">
           <div class="skill-content">
             <img src="@/image/snake.png" alt="守護蛇" class="skill-img" />
             <span class="skill-level">{{ defenderSkill.level }}</span>
@@ -1481,7 +1693,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
           </svg>
         </div>
 
-        <div v-if="iceSkill.level > 0" class="skill-icon" :class="{ cooling: iceSkill.cooldown > 0 }">
+        <div v-if="iceSkill.level > 0 && !frostLordSkill.unlocked" class="skill-icon" :class="{ cooling: iceSkill.cooldown > 0 }">
           <div class="skill-content">
             <img src="@/image/ice.png" alt="冰凍" class="skill-img" />
             <span class="skill-level">{{ iceSkill.level }}</span>
@@ -1514,6 +1726,25 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
               r="16"
               :style="{ 
                 strokeDashoffset: thunderDragonSkill.cooldown > 0 ? (thunderDragonSkill.cooldown / THUNDER_DRAGON_COOLDOWN) * 100 : 0 
+              }"
+            />
+          </svg>
+        </div>
+
+        <div v-if="frostLordSkill.unlocked" class="skill-icon" :class="{ cooling: frostLordSkill.cooldown > 0 }">
+          <div class="skill-content">
+            <img src="@/image/ice_dragon.png" alt="極寒領主" class="skill-img" />
+            <span class="skill-level">{{ frostLordSkill.level }}</span>
+          </div>
+          <svg class="cooldown-ring" viewBox="0 0 36 36">
+            <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+            <circle 
+              class="cooldown-progress" 
+              cx="18" 
+              cy="18" 
+              r="16"
+              :style="{ 
+                strokeDashoffset: frostLordSkill.cooldown > 0 ? (frostLordSkill.cooldown / FROST_LORD_COOLDOWN) * 100 : 0 
               }"
             />
           </svg>
@@ -1785,6 +2016,23 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 .cell.thunder-dragon {
   background-color: #f1c40f;
   box-shadow: 0 0 10px 4px #f39c12;
+}
+
+.cell.frost-lord-snake {
+  background-color: #4682B4;
+}
+
+.cell.frost-lord-head {
+  background-color: #1E90FF;
+  box-shadow: 0 0 10px 4px #0000CD;
+}
+
+.cell.frost-lord-path {
+  background-color: #87CEEB;
+}
+
+.cell.frost-lord-field {
+  background-color: rgba(135, 206, 235, 0.3);
 }
 
 @keyframes lightning-flash {
