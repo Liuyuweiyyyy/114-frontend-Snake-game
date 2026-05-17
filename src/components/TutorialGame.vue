@@ -257,7 +257,7 @@ const moveAISnake = () => {
     
     if (tutorialStep.value === 'aiEat') {
       tutorialStep.value = 'noFood'
-      showHint.value = 'AI 蛇沒有食物，正在前進...'
+      showHint.value = '敵蛇沒有食物，正在前進...'
       
       setTimeout(() => {
         tutorialStep.value = 'showDefender'
@@ -436,9 +436,9 @@ onUnmounted(() => {
 
     <div class="info">
       <template v-if="tutorialStep === 'move'">按方向鍵移動吃食物</template>
-      <template v-else-if="tutorialStep === 'aiSpawn'">AI 蛇即將出現...</template>
-      <template v-else-if="tutorialStep === 'aiEat'">AI 蛇正在進食...</template>
-      <template v-else-if="tutorialStep === 'noFood'">AI 蛇沒有食物，正在前進...</template>
+      <template v-else-if="tutorialStep === 'aiSpawn'">敵蛇即將出現...</template>
+      <template v-else-if="tutorialStep === 'aiEat'">敵蛇正在進食...</template>
+      <template v-else-if="tutorialStep === 'noFood'">敵蛇沒有食物，正在前進...</template>
       <template v-else-if="tutorialStep === 'showDefender'">按空白鍵召喚守護蛇！</template>
       <template v-else-if="tutorialStep === 'useDefender'">守護蛇出擊！</template>
       <template v-else-if="tutorialStep === 'complete'">教學完成！</template>

@@ -92,6 +92,21 @@ interface FrostLordPath {
 }
 const frostLordPath = ref<FrostLordPath[]>([])
 
+// 凜冬雷暴技能
+const STORM_COOLDOWN = 5000
+const stormSkill = ref({ level: 0, unlocked: false, cooldown: 0 })
+let stormCooldownTimer: ReturnType<typeof setInterval> | null = null
+
+const stormActive = ref(false)
+let stormDurationTimer: ReturnType<typeof setTimeout> | null = null
+
+const stormSnake = ref<{ position: Position; direction: Direction; length: number }[]>([])
+let stormMoveTimer: ReturnType<typeof setInterval> | null = null
+
+// 混亂狀態
+const confusedAIs = ref<Set<string>>(new Set())
+const confusionTimers = ref<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
 const ICE_COOLDOWN = 5000
 const iceActive = ref(false)
 let iceDurationTimer: ReturnType<typeof setTimeout> | null = null
@@ -204,7 +219,7 @@ function generateAvailableSkills(): void {
     aiTimers.push(setInterval(() => moveAISnake(aiSnakes.value.length - 1), aiSpeed))
   }
   
-  // 守护蛇升级选项（天譴之龍解鎖後隱藏）
+  // 守护蛇升级选项（天譴之龍/極寒領主解鎖後隱藏）
   if (defenderSkill.value.level < 3 && !thunderDragonSkill.value.unlocked && !frostLordSkill.value.unlocked) {
     const nextLevel = defenderSkill.value.level + 1
     let desc = ''
@@ -221,8 +236,8 @@ function generateAvailableSkills(): void {
     })
   }
   
-  // 闪电解锁选项（天譴之龍解鎖後隱藏）
-  if (lightningSkill.value.level === 0 && !thunderDragonSkill.value.unlocked) {
+  // 闪电解锁选项（天譴之龍/凜冬雷暴解鎖後隱藏）
+  if (lightningSkill.value.level === 0 && !thunderDragonSkill.value.unlocked && !stormSkill.value.unlocked) {
     availableSkills.value.push({
       key: 'lightning',
       name: '閃電',
@@ -231,8 +246,8 @@ function generateAvailableSkills(): void {
     })
   }
   
-  // 闪电升级选项（天譴之龍解鎖後隱藏）
-  if (lightningSkill.value.level > 0 && lightningSkill.value.level < 3 && !thunderDragonSkill.value.unlocked) {
+  // 闪电升级选项（天譴之龍/凜冬雷暴解鎖後隱藏）
+  if (lightningSkill.value.level > 0 && lightningSkill.value.level < 3 && !thunderDragonSkill.value.unlocked && !stormSkill.value.unlocked) {
     const nextLevel = lightningSkill.value.level + 1
     let desc = ''
     if (nextLevel === 2) {
@@ -248,8 +263,8 @@ function generateAvailableSkills(): void {
     })
 }
    
-// 冰冻解锁选项（極寒領主解鎖後隱藏）
-  if (iceSkill.value.level === 0 && !frostLordSkill.value.unlocked) {
+// 冰冻解锁选项（極寒領主/凜冬雷暴解鎖後隱藏）
+  if (iceSkill.value.level === 0 && !frostLordSkill.value.unlocked && !stormSkill.value.unlocked) {
     availableSkills.value.push({
       key: 'ice',
       name: '冰凍',
@@ -258,8 +273,8 @@ function generateAvailableSkills(): void {
     })
   }
     
-// 冰冻升级选项（極寒領主解鎖後隱藏）
-  if (iceSkill.value.level > 0 && iceSkill.value.level < 3 && !frostLordSkill.value.unlocked) {
+// 冰冻升级选项（極寒領主/凜冬雷暴解鎖後隱藏）
+  if (iceSkill.value.level > 0 && iceSkill.value.level < 3 && !frostLordSkill.value.unlocked && !stormSkill.value.unlocked) {
     const nextLevel = iceSkill.value.level + 1
     const desc = nextLevel === 2 ? '減速效果增強' : '範圍擴大'
     availableSkills.value.push({
@@ -270,8 +285,8 @@ function generateAvailableSkills(): void {
     })
   }
   
-  // 天譴之龍解锁选项（守護蛇满级 + 閃電满级）
-  if (defenderSkill.value.level === 3 && lightningSkill.value.level === 3 && thunderDragonSkill.value.level === 0) {
+  // 天譴之龍解锁选项（守護蛇满级 + 閃電满级，且未解鎖凜冬雷暴）
+  if (defenderSkill.value.level === 3 && lightningSkill.value.level === 3 && thunderDragonSkill.value.level === 0 && !stormSkill.value.unlocked) {
     availableSkills.value.push({
       key: 'thunderDragon',
       name: '天譴之龍',
@@ -281,11 +296,21 @@ function generateAvailableSkills(): void {
   }
   
   // 極寒領主解锁选项（守護蛇满级 + 冰凍满级）
-  if (defenderSkill.value.level === 3 && iceSkill.value.level === 3 && frostLordSkill.value.level === 0) {
+  if (defenderSkill.value.level === 3 && iceSkill.value.level === 3 && frostLordSkill.value.level === 0 && !stormSkill.value.unlocked) {
     availableSkills.value.push({
       key: 'frostLord',
       name: '極寒領主',
-      desc: '召喚極寒領主，撞到敵人會造成冰凍，行進路線會形成<span class="tooltip-tip-road">冰路</span>',
+      desc: '召喚極寒領主，撞到敵人會造成冰凍，行進路線會形成<span class="tooltip-text-road">冰路</span>',
+      isUnlock: true
+    })
+  }
+  
+  // 凜冬雷暴解锁选项（冰凍满级 + 閃電满级）
+  if (iceSkill.value.level === 3 && lightningSkill.value.level === 3 && stormSkill.value.level === 0 && !thunderDragonSkill.value.unlocked && !frostLordSkill.value.unlocked) {
+    availableSkills.value.push({
+      key: 'storm',
+      name: '凜冬雷暴',
+      desc: '召喚雷暴，範圍內敵人會繞著風暴打轉，結束後敵人<span class="tooltip-text-confused">錯亂</span>',
       isUnlock: true
     })
   }
@@ -329,20 +354,148 @@ function selectSkill(skillKey: string): void {
     frostLordSkill.value.cooldown = 0
     iceActive.value = false
     if (iceDurationTimer) clearTimeout(iceDurationTimer)
+  } else if (skillKey === 'storm') {
+    stormSkill.value.level = 1
+    stormSkill.value.unlocked = true
+    stormSkill.value.cooldown = 0
   }
   
   showSkillCards.value = false
   gameStatus.value = 'playing'
   gameLoop()
+  
+  // 重新啟動冷卻計時器
+  if (lightningSkill.value.cooldown > 0 && lightningCooldownTimer === null) {
+    lightningCooldownTimer = setInterval(() => {
+      lightningSkill.value.cooldown -= 100
+      if (lightningSkill.value.cooldown <= 0) {
+        lightningSkill.value.cooldown = 0
+        if (lightningCooldownTimer) {
+          clearInterval(lightningCooldownTimer)
+          lightningCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (iceSkill.value.cooldown > 0 && iceCooldownTimer === null) {
+    iceCooldownTimer = setInterval(() => {
+      iceSkill.value.cooldown -= 100
+      if (iceSkill.value.cooldown <= 0) {
+        iceSkill.value.cooldown = 0
+        if (iceCooldownTimer) {
+          clearInterval(iceCooldownTimer)
+          iceCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (thunderDragonSkill.value.cooldown > 0 && thunderCooldownTimer === null) {
+    thunderCooldownTimer = setInterval(() => {
+      thunderDragonSkill.value.cooldown -= 100
+      if (thunderDragonSkill.value.cooldown <= 0) {
+        thunderDragonSkill.value.cooldown = 0
+        if (thunderCooldownTimer) {
+          clearInterval(thunderCooldownTimer)
+          thunderCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (frostLordSkill.value.cooldown > 0 && frostLordCooldownTimer === null) {
+    frostLordCooldownTimer = setInterval(() => {
+      frostLordSkill.value.cooldown -= 100
+      if (frostLordSkill.value.cooldown <= 0) {
+        frostLordSkill.value.cooldown = 0
+        if (frostLordCooldownTimer) {
+          clearInterval(frostLordCooldownTimer)
+          frostLordCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (stormSkill.value.cooldown > 0 && stormCooldownTimer === null) {
+    stormCooldownTimer = setInterval(() => {
+      stormSkill.value.cooldown -= 100
+      if (stormSkill.value.cooldown <= 0) {
+        stormSkill.value.cooldown = 0
+        if (stormCooldownTimer) {
+          clearInterval(stormCooldownTimer)
+          stormCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
 }
 
 function resumeFromLevelUp(): void {
   showSkillCards.value = false
   gameStatus.value = 'playing'
   gameLoop()
+  
+  // 重新啟動冷卻計時器
+  if (lightningSkill.value.cooldown > 0 && lightningCooldownTimer === null) {
+    lightningCooldownTimer = setInterval(() => {
+      lightningSkill.value.cooldown -= 100
+      if (lightningSkill.value.cooldown <= 0) {
+        lightningSkill.value.cooldown = 0
+        if (lightningCooldownTimer) {
+          clearInterval(lightningCooldownTimer)
+          lightningCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (iceSkill.value.cooldown > 0 && iceCooldownTimer === null) {
+    iceCooldownTimer = setInterval(() => {
+      iceSkill.value.cooldown -= 100
+      if (iceSkill.value.cooldown <= 0) {
+        iceSkill.value.cooldown = 0
+        if (iceCooldownTimer) {
+          clearInterval(iceCooldownTimer)
+          iceCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (thunderDragonSkill.value.cooldown > 0 && thunderCooldownTimer === null) {
+    thunderCooldownTimer = setInterval(() => {
+      thunderDragonSkill.value.cooldown -= 100
+      if (thunderDragonSkill.value.cooldown <= 0) {
+        thunderDragonSkill.value.cooldown = 0
+        if (thunderCooldownTimer) {
+          clearInterval(thunderCooldownTimer)
+          thunderCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (frostLordSkill.value.cooldown > 0 && frostLordCooldownTimer === null) {
+    frostLordCooldownTimer = setInterval(() => {
+      frostLordSkill.value.cooldown -= 100
+      if (frostLordSkill.value.cooldown <= 0) {
+        frostLordSkill.value.cooldown = 0
+        if (frostLordCooldownTimer) {
+          clearInterval(frostLordCooldownTimer)
+          frostLordCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
+  if (stormSkill.value.cooldown > 0 && stormCooldownTimer === null) {
+    stormCooldownTimer = setInterval(() => {
+      stormSkill.value.cooldown -= 100
+      if (stormSkill.value.cooldown <= 0) {
+        stormSkill.value.cooldown = 0
+        if (stormCooldownTimer) {
+          clearInterval(stormCooldownTimer)
+          stormCooldownTimer = null
+        }
+      }
+    }, 100)
+  }
 }
 
-function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | 'ice-field' | 'thunder-dragon' | 'chain-lightning-warning' | 'chain-lightning-strike' | 'frost-lord-head'  | 'frost-lord-path'  | 'frost-lord-field' | null {
+function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | 'ice-field' | 'thunder-dragon' | 'chain-lightning-warning' | 'chain-lightning-strike' | 'frost-lord-head'  | 'frost-lord-path'  | 'frost-lord-field' | 'storm-field' | 'storm-snake' | 'storm-head' | null {
   const x = (index - 1) % GRID_WIDTH
   const y = Math.floor((index - 1) / GRID_WIDTH)
 
@@ -378,7 +531,17 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
   
   if (food.value.x === x && food.value.y === y) return 'food'
   
-  // 极寒领主淡蓝色蛇头（冰冻效果上面，食物下面）
+  // 凜冬雷暴風暴蛇
+  if (stormSnake.value.length > 0) {
+    for (let i = stormSnake.value.length - 1; i >= 0; i--) {
+      const seg = stormSnake.value[i]!
+      if (seg.position.x === x && seg.position.y === y) {
+        return i === 0 ? 'storm-head' : 'storm-snake'
+      }
+    }
+  }
+  
+  // 极寒领主淡蓝色蛇头
   if (frostLordSnake.value.length > 0) {
     const head = frostLordSnake.value[0]!
     if (head.x === x && head.y === y) {
@@ -386,13 +549,13 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
     }
   }
   
-  // 极寒领主白色路径（冰冻效果上面，淡蓝色蛇下面）
+  // 极寒领主白色路径
   for (const path of frostLordPath.value) {
     if (path.position.x === x && path.position.y === y) return 'frost-lord-path'
   }
   
-  // 冰冻效果渲染（跟随玩家蛇头，在食物之后）
-  if (iceActive.value) {
+  // 冰冻效果渲染
+  if (iceActive.value && !stormSkill.value.unlocked) {
     const iceSize = iceSkill.value.level >= 3 ? 5 : 3
     const halfSize = Math.floor(iceSize / 2)
     if (x >= head.x - halfSize && x <= head.x + halfSize &&
@@ -401,7 +564,7 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
     }
   }
   
-  // 极寒领主减速范围（5×5，以蛇头为中心）
+  // 极寒领主减速范围
   if (frostLordActive.value) {
     const frostHalfSize = 2
     if (x >= head.x - frostHalfSize && x <= head.x + frostHalfSize &&
@@ -410,8 +573,8 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
     }
   }
     
-  // 闪电效果渲染（在天譴之龍之前）
-  if (lightningActive.value && lightningPosition.value && lightningPhase.value !== 'none') {
+  // 闪电效果渲染
+  if (lightningActive.value && lightningPosition.value && lightningPhase.value !== 'none' && !stormSkill.value.unlocked) {
     const lx = lightningPosition.value.x
     const ly = lightningPosition.value.y
     const lightningSize = lightningSkill.value.level >= 3 ? 5 : 4
@@ -421,18 +584,27 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
     }
   }
   
-  // 天譴之龍渲染（在闪电之后，最上层）
+  // 天譴之龍渲染
   for (const dragon of thunderDragons.value) {
     if (dragon.position.x === x && dragon.position.y === y) return 'thunder-dragon'
   }
+
+  // 凜冬雷暴 5×5 範圍
+  if (stormActive.value && stormSnake.value.length > 0) {
+    const stormHead = stormSnake.value[0]!
+    if (x >= stormHead.position.x - 2 && x <= stormHead.position.x + 2 &&
+        y >= stormHead.position.y - 2 && y <= stormHead.position.y + 2) {
+      return 'storm-field'
+    }
+  }
   
-  // 连锁雷击渲染（最上层，strike时白色覆盖在warning黄色上面）
+  // 连锁雷击渲染
   for (const cl of chainLightnings.value) {
     if (x >= cl.position.x && x < cl.position.x + 5 && y >= cl.position.y && y < cl.position.y + 5) {
       if (cl.phase === 'strike') return 'chain-lightning-strike'
       if (cl.phase === 'warning') return 'chain-lightning-warning'
     }
-  }
+  }  
   
   return null
 }
@@ -581,20 +753,41 @@ function move(): void {
       if (gameTimer !== null) {
         clearInterval(gameTimer)
         gameTimer = null
-      }      
+      }
+      // 清除所有冷卻計時器（技能選擇時暫停冷卻）
+      if (lightningCooldownTimer !== null) {
+        clearInterval(lightningCooldownTimer)
+        lightningCooldownTimer = null
+      }
+      if (iceCooldownTimer !== null) {
+        clearInterval(iceCooldownTimer)
+        iceCooldownTimer = null
+      }
+      if (thunderCooldownTimer !== null) {
+        clearInterval(thunderCooldownTimer)
+        thunderCooldownTimer = null
+      }
+      if (frostLordCooldownTimer !== null) {
+        clearInterval(frostLordCooldownTimer)
+        frostLordCooldownTimer = null
+      }
+      if (stormCooldownTimer !== null) {
+        clearInterval(stormCooldownTimer)
+        stormCooldownTimer = null
+      }
       showSkillCards.value = true
       generateAvailableSkills()
     }
     food.value = generateFood([...snake.value, ...aiSnakes.value.flatMap(s => s.positions)])
   }
 
-  // 自动释放闪电技能（已解锁，CD 完毕，天譴之龍解鎖後不觸發）
-  if (lightningSkill.value.level > 0 && lightningSkill.value.cooldown <= 0 && !lightningActive.value && !thunderDragonSkill.value.unlocked) {
+  // 自动释放闪电技能（已解锁，CD 完毕，天譴之龍/凜冬雷暴解鎖後不觸發）
+  if (lightningSkill.value.level > 0 && lightningSkill.value.cooldown <= 0 && !lightningActive.value && !thunderDragonSkill.value.unlocked && !stormSkill.value.unlocked) {
     activateLightning()
   }
   
-  // 自动释放冰冻技能（已解锁，CD 完毕，極寒領主解鎖後不觸發）
-  if (iceSkill.value.level > 0 && iceSkill.value.cooldown <= 0 && !iceActive.value && !frostLordSkill.value.unlocked) {
+  // 自动释放冰冻技能（已解锁，CD 完毕，極寒領主/凜冬雷暴解鎖後不觸發）
+  if (iceSkill.value.level > 0 && iceSkill.value.cooldown <= 0 && !iceActive.value && !frostLordSkill.value.unlocked && !stormSkill.value.unlocked) {
     activateIce()
   }
   
@@ -606,6 +799,11 @@ function move(): void {
   // 自动释放极寒领主技能（已解锁，CD 完毕，未激活）
   if (frostLordSkill.value.unlocked && frostLordSkill.value.cooldown <= 0 && !frostLordActive.value) {
     activateFrostLord()
+  }
+  
+  // 自动释放凜冬雷暴技能（已解锁，CD 完毕，未激活）
+  if (stormSkill.value.unlocked && stormSkill.value.cooldown <= 0 && !stormActive.value) {
+    activateStorm()
   }
 }
 
@@ -701,6 +899,189 @@ function deactivateFrostLord(): void {
       if (frostLordCooldownTimer) {
         clearInterval(frostLordCooldownTimer)
         frostLordCooldownTimer = null
+      }
+    }
+  }, 100)
+}
+
+// 凜冬雷暴技能
+function activateStorm(): void {
+  if (stormActive.value || stormSkill.value.cooldown > 0) return
+  
+  const head = snake.value[0]!
+  
+  // 初始化風暴蛇（在玩家右側）
+  stormSnake.value = []
+  for (let i = 0; i < 5; i++) {
+    stormSnake.value.push({
+      position: { x: head.x + i + 1, y: head.y },
+      direction: 'LEFT',
+      length: 5
+    })
+  }
+  
+  stormActive.value = true
+  
+  if (stormDurationTimer) clearTimeout(stormDurationTimer)
+  stormDurationTimer = setTimeout(() => {
+    endStorm()
+  }, 3000)
+  
+  if (stormMoveTimer) clearInterval(stormMoveTimer)
+  stormMoveTimer = setInterval(moveStormSnake, BASE_SPEED / 2.0)
+}
+
+function moveStormSnake(): void {
+  if (gameStatus.value !== 'playing' || !stormActive.value || stormSnake.value.length === 0) return
+  
+  const stormHead = stormSnake.value[0]!
+  const stormPos = stormHead.position
+  
+  // 檢查是否有 AI 蛇在風暴範圍外
+  const aiOutsideStorm = aiSnakes.value.some(ai => {
+    const aiHead = ai.positions[0]!
+    const dx = Math.abs(aiHead.x - stormPos.x)
+    const dy = Math.abs(aiHead.y - stormPos.y)
+    return dx > 2 || dy > 2
+  })
+  
+  let targetDir: Direction
+  
+  if (aiOutsideStorm) {
+    // 有 AI 在風暴外 → 追蹤最近的外面 AI
+    let nearestAI = aiSnakes.value[0]!
+    let minDist = Infinity
+    
+    for (const ai of aiSnakes.value) {
+      const aiHead = ai.positions[0]!
+      const dx = aiHead.x - stormPos.x
+      const dy = aiHead.y - stormPos.y
+      
+      // 只追蹤範圍外的 AI
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        const dist = Math.abs(dx) + Math.abs(dy)
+        if (dist < minDist) {
+          minDist = dist
+          nearestAI = ai
+        }
+      }
+    }
+    
+    const aiHead = nearestAI.positions[0]!
+    const dx = aiHead.x - stormPos.x
+    const dy = aiHead.y - stormPos.y
+    
+    if (Math.abs(dx) > Math.abs(dy)) {
+      targetDir = dx > 0 ? 'RIGHT' : 'LEFT'
+    } else {
+      targetDir = dy > 0 ? 'DOWN' : 'UP'
+    }
+  } else {
+    // 所有 AI 都在風暴內 → 隨機亂走
+    const directions: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT']
+    targetDir = directions[Math.floor(Math.random() * directions.length)]!
+  }
+  
+  stormHead.direction = targetDir
+  
+  const next = { ...stormHead.position }
+  switch (targetDir) {
+    case 'UP':    next.y--; break
+    case 'DOWN':  next.y++; break
+    case 'LEFT':  next.x--; break
+    case 'RIGHT': next.x++; break
+  }
+  
+  // 穿牆
+  next.x = ((next.x % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH
+  next.y = ((next.y % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
+  stormHead.position = next
+  
+  // 更新身体（向后移动）
+  for (let i = stormSnake.value.length - 1; i > 0; i--) {
+    stormSnake.value[i]!.position = { ...stormSnake.value[i - 1]!.position }
+  }
+  
+  // 5×5 范围内的 AI 被吸附，绕着风暴中心逆时针打转
+  const stormCenter = stormSnake.value[0]!
+  for (const ai of aiSnakes.value) {
+    const aiHead = ai.positions[0]!
+    const dx = Math.abs(aiHead.x - stormCenter.position.x)
+    const dy = Math.abs(aiHead.y - stormCenter.position.y)
+    
+    if (dx <= 2 && dy <= 2) {
+      // 计算绕行方向（逆时针）
+      const toCenterX = stormCenter.position.x - aiHead.x
+      const toCenterY = stormCenter.position.y - aiHead.y
+      
+      // 逆时针切线方向：(-dy, dx)
+      let tangentX = -toCenterY
+      let tangentY = toCenterX
+      
+      // 归一化
+      const len = Math.sqrt(tangentX * tangentX + tangentY * tangentY)
+      if (len > 0) {
+        tangentX /= len
+        tangentY /= len
+        
+        // 选择最接近的方向
+        if (Math.abs(tangentX) > Math.abs(tangentY)) {
+          ai.direction = tangentX > 0 ? 'RIGHT' : 'LEFT'
+        } else {
+          ai.direction = tangentY > 0 ? 'DOWN' : 'UP'
+        }
+      }
+    }
+  }
+}
+
+function endStorm(): void {
+  const stormCenter = stormSnake.value[0]?.position
+  if (stormCenter) {
+    // 对 5×5 范围内的 AI 施加混亂
+    for (let i = 0; i < aiSnakes.value.length; i++) {
+      const ai = aiSnakes.value[i]
+      if(!ai)  continue
+      const aiHead = ai.positions[0]!
+      const dx = Math.abs(aiHead.x - stormCenter.x)
+      const dy = Math.abs(aiHead.y - stormCenter.y)
+      
+      if (dx <= 2 && dy <= 2) {
+        const aiId = String(i)
+        confusedAIs.value.add(aiId)
+        
+        const existingTimer = confusionTimers.value.get(aiId)
+        if (existingTimer) clearTimeout(existingTimer)
+        
+        confusionTimers.value.set(aiId, setTimeout(() => {
+          confusedAIs.value.delete(aiId)
+          confusionTimers.value.delete(aiId)
+        }, 3000))
+      }
+    }
+  }
+  
+  stormActive.value = false
+  stormSnake.value = []
+  
+  if (stormMoveTimer) {
+    clearInterval(stormMoveTimer)
+    stormMoveTimer = null
+  }
+  if (stormDurationTimer) {
+    clearTimeout(stormDurationTimer)
+    stormDurationTimer = null
+  }
+  
+  stormSkill.value.cooldown = STORM_COOLDOWN
+  if (stormCooldownTimer) clearInterval(stormCooldownTimer)
+  stormCooldownTimer = setInterval(() => {
+    stormSkill.value.cooldown -= 100
+    if (stormSkill.value.cooldown <= 0) {
+      stormSkill.value.cooldown = 0
+      if (stormCooldownTimer) {
+        clearInterval(stormCooldownTimer)
+        stormCooldownTimer = null
       }
     }
   }, 100)
@@ -1083,7 +1464,24 @@ function moveAISnake(index: number): void {
   const onPath = frostLordPath.value.some(path => 
     path.position.x === aiHead.x && path.position.y === aiHead.y
   )
-  if (onPath) {
+  
+  // 風暴範圍內檢測
+  const onStorm = stormActive.value && stormSnake.value.length > 0 && (() => {
+    const stormCenter = stormSnake.value[0]!
+    return Math.abs(aiHead.x - stormCenter.position.x) <= 2 && 
+           Math.abs(aiHead.y - stormCenter.position.y) <= 2
+  })()
+  
+  // 混亂狀態：100% 隨機變向
+  const aiId = String(index)
+  const isConfused = confusedAIs.value.has(aiId)
+  
+  if (isConfused) {
+    const directions: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT']
+    ai.direction = directions[Math.floor(Math.random() * directions.length)]!
+  } else if (onStorm) {
+    // 在風暴範圍內：保持 storm 設定的方向，不呼叫 getAIDirection
+  } else if (onPath) {
     // 保持原方向，不调用 getAIDirection
   } else {
     ai.direction = getAIDirection(ai.positions, food.value, ai.direction)
@@ -1311,10 +1709,10 @@ function resetGame(): void {
   playerSpeedBoosted.value = false
   iceActive.value = false
   
-  defenderSkill.value.level = 1
-  lightningSkill.value.level = 0
+  defenderSkill.value.level = 3
+  lightningSkill.value.level = 3
   lightningSkill.value.cooldown = 0
-  iceSkill.value.level = 0
+  iceSkill.value.level = 3
   iceSkill.value.cooldown = 0
   
   lightningActive.value = false
@@ -1386,6 +1784,24 @@ function resetGame(): void {
     clearTimeout(path.timer)
   }
   frostLordPath.value = []
+  
+  stormSkill.value.level = 0
+  stormSkill.value.unlocked = false
+  stormSkill.value.cooldown = 0
+  if (stormCooldownTimer) clearInterval(stormCooldownTimer)
+  stormCooldownTimer = null
+  
+  stormActive.value = false
+  if (stormDurationTimer) clearTimeout(stormDurationTimer)
+  stormDurationTimer = null
+  if (stormMoveTimer) clearInterval(stormMoveTimer)
+  stormMoveTimer = null
+  stormSnake.value = []
+  confusedAIs.value.clear()
+  for (const timer of confusionTimers.value.values()) {
+    clearTimeout(timer)
+  }
+  confusionTimers.value.clear()
   
   if (gameTimer !== null) clearInterval(gameTimer)
   for (const timer of aiTimers) {
@@ -1468,6 +1884,10 @@ function togglePause(): void {
       clearInterval(frostLordCooldownTimer)
       frostLordCooldownTimer = null
     }
+    if (stormCooldownTimer !== null) {
+      clearInterval(stormCooldownTimer)
+      stormCooldownTimer = null
+    }
   } else if (gameStatus.value === 'paused') {
     gameStatus.value = 'playing'
     gameLoop()
@@ -1533,6 +1953,19 @@ function togglePause(): void {
           if (frostLordCooldownTimer) {
             clearInterval(frostLordCooldownTimer)
             frostLordCooldownTimer = null
+          }
+        }
+      }, 100)
+    }
+    // 如果凜冬雷暴冷却中，重新启动冷却计时器
+    if (stormSkill.value.cooldown > 0 && stormCooldownTimer === null) {
+      stormCooldownTimer = setInterval(() => {
+        stormSkill.value.cooldown -= 100
+        if (stormSkill.value.cooldown <= 0) {
+          stormSkill.value.cooldown = 0
+          if (stormCooldownTimer) {
+            clearInterval(stormCooldownTimer)
+            stormCooldownTimer = null
           }
         }
       }, 100)
@@ -1648,6 +2081,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
     </div>
 
     <div class="game-area">
+      <button class="back-btn" @click="goToMenu">返回主畫面</button>
       <div class="header">
         <h1>貪食蛇</h1>
       </div>
@@ -1701,7 +2135,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
           </svg>
         </div>
 
-        <div v-if="lightningSkill.level > 0 && !thunderDragonSkill.unlocked" class="skill-icon" :class="{ cooling: lightningSkill.cooldown > 0 }">
+        <div v-if="lightningSkill.level > 0 && !thunderDragonSkill.unlocked && !stormSkill.unlocked" class="skill-icon" :class="{ cooling: lightningSkill.cooldown > 0 }">
           <div class="skill-content">
             <img src="@/image/flash.png" alt="閃電" class="skill-img" />
             <span class="skill-level">{{ lightningSkill.level }}</span>
@@ -1720,7 +2154,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
           </svg>
         </div>
 
-        <div v-if="iceSkill.level > 0 && !frostLordSkill.unlocked" class="skill-icon" :class="{ cooling: iceSkill.cooldown > 0 }">
+        <div v-if="iceSkill.level > 0 && !frostLordSkill.unlocked && !stormSkill.unlocked" class="skill-icon" :class="{ cooling: iceSkill.cooldown > 0 }">
           <div class="skill-content">
             <img src="@/image/ice.png" alt="冰凍" class="skill-img" />
             <span class="skill-level">{{ iceSkill.level }}</span>
@@ -1772,6 +2206,25 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
               r="16"
               :style="{ 
                 strokeDashoffset: frostLordSkill.cooldown > 0 ? (frostLordSkill.cooldown / FROST_LORD_COOLDOWN) * 100 : 0 
+              }"
+            />
+          </svg>
+        </div>
+
+        <div v-if="stormSkill.unlocked" class="skill-icon" :class="{ cooling: stormSkill.cooldown > 0 }">
+          <div class="skill-content">
+            <img src="@/image/storm.png" alt="凜冬雷暴" class="skill-img" />
+            <span class="skill-level">{{ stormSkill.level }}</span>
+          </div>
+          <svg class="cooldown-ring" viewBox="0 0 36 36">
+            <circle class="cooldown-bg" cx="18" cy="18" r="16" />
+            <circle 
+              class="cooldown-progress" 
+              cx="18" 
+              cy="18" 
+              r="16"
+              :style="{ 
+                strokeDashoffset: stormSkill.cooldown > 0 ? (stormSkill.cooldown / STORM_COOLDOWN) * 100 : 0 
               }"
             />
           </svg>
@@ -1942,6 +2395,25 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
   transition: stroke-dashoffset 0.1s linear;
 }
 
+.back-btn {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  background-color: #95a5a6;
+  color: #fff;
+  transition: background-color 0.2s;
+  z-index: 10;
+}
+
+.back-btn:hover {
+  background-color: #7f8c8d;
+}
+
 .header {
   text-align: center;
   margin-bottom: 16px;
@@ -2060,6 +2532,19 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 .cell.frost-lord-field {
   background-color: rgba(135, 206, 235, 0.3);
+}
+
+.cell.storm-field {
+  background-color: rgba(179, 157, 219, 0.3);
+}
+
+.cell.storm-snake {
+  background-color: #B39DDB;
+}
+
+.cell.storm-head {
+  background-color: #9575CD;
+  box-shadow: 0 0 10px 4px #7E57C2;
 }
 
 @keyframes lightning-flash {
@@ -2392,6 +2877,27 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 .skill-card .skill-desc :deep(.tooltip-text-road):hover::after {
   content: '在上面的敵蛇無法改變方向';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #333;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.skill-card .skill-desc :deep(.tooltip-text-confused) {
+  text-decoration: underline;
+  cursor: help;
+  position: relative;
+}
+
+.skill-card .skill-desc :deep(.tooltip-text-confused):hover::after {
+  content: '使敵蛇方向混亂';
   position: absolute;
   bottom: 100%;
   left: 50%;

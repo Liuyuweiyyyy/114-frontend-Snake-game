@@ -35,7 +35,7 @@
 | `score` | `Ref<number>` | 分數 |
 | `eatenCount` | `Ref<number>` | 已吃食物數 |
 | `gameStatus` | `Ref<GameStatus>` | 遊戲狀態 |
-| `aiSnakes` | `Ref<AISnake[]>` | AI 蛇陣列 |
+| `aiSnakes` | `Ref<AISnake[]>` | 敵蛇陣列 |
 | `thunderDragonSkill` | `Ref<{level, unlocked, cooldown}>` | 天譴之龍技能狀態 |
 | `thunderDragons` | `Ref<{position, direction}[]>` | 6隻天譴之龍位置和方向 |
 | `aiHitCounts` | `Ref<Map<string, number>>` | 每隻龍對每條AI的撞擊次數 |
@@ -44,7 +44,7 @@
 | `frostLordSkill` | `Ref<{level, unlocked, cooldown}>` |	極寒領主技能狀態 |
 | `iceSnake` | `Ref<{position, direction, angle}>` | 冰蛇位置、方向、角度 |
 | `icePathTiles` | `Ref<{position, timer}[]>` | 冰路瓷磚陣列 |
-| `icePathSlipEffects` | `Ref<Map<string, number>>` | 踩上冰路打滑的 AI 及剩餘時間 |
+| `icePathSlipEffects` | `Ref<Map<string, number>>` | 踩上冰路打滑的敵蛇及剩餘時間 |
 
 ---
 
@@ -53,10 +53,10 @@
 | 函式 | 說明 |
 |------|------|
 | `moveSnake()` | 通用移動函式（玩家/AI/守護蛇共用） |
-| `getAIDirection()` | AI 計算路徑（避開障礙物） |
-| `getDefenderTargetDirection()` | 守護蛇追蹤最近 AI |
+| `getAIDirection()` | 敵蛇計算路徑（避開障礙物） |
+| `getDefenderTargetDirection()` | 守護蛇追蹤最近敵蛇 |
 | `move()` | 玩家蛇移動主函式 |
-| `moveAISnake()` | AI 蛇移動 |
+| `moveAISnake()` | 敵蛇移動 |
 | `moveDefenderSnake()` / `moveDefenderSnake2()` | 守護蛇移動 + 碰撞邏輯 |
 | `changeDirection()` | 防 180° 回頭 |
 | `gameLoop()` | 啟動遊戲計時器 |
@@ -64,15 +64,15 @@
 | `startGame()` | 開始遊戲 |
 | `togglePause()` | 暫停/繼續 |
 | `generateFood()` | 生成食物（避開蛇身） |
-| `getThunderDragonTargetDirection()` | 天譴之龍追蹤最近 AI |
-| `triggerChainLightning()` | 連續雷擊效果（5×5範圍，周圍AI眩暈+停頓，玩家加速） |
+| `getThunderDragonTargetDirection()` | 天譴之龍追蹤最近敵蛇 |
+| `triggerChainLightning()` | 連續雷擊效果（5×5範圍，周圍敵蛇眩暈+停頓，玩家加速） |
 | `moveThunderDragon()` | 天譴之龍移動 + 撞擊遞進效果 |
 | `activateThunderDragon()` | 召喚6隻天譴之龍（玩家左3右3） |
 | `activateFrostLord()` | 召喚極寒領主（5×5 減速範圍 + 冰蛇 + 冰路） |
 | `moveIceSnake()` | 冰蛇圓周運動（15° 遞進） |
 | `createIcePath()` | 在冰蛇路徑留下冰路瓷磚（持續 3 秒） |
 | `updateIcePaths()` | 更新冰路計時器，清除過期瓷磚 |
-| `checkIcePathSlip()` | 檢查 AI 是否踩上冰路，觸發打滑效果 |
+| `checkIcePathSlip()` | 檢查敵蛇是否踩上冰路，觸發打滑效果 |
 
 ---
 
@@ -89,7 +89,7 @@
 
 ### 分數
 - 玩家吃食物：+20 分
-- AI 吃食物：-10 分
+- 敵蛇吃食物：-10 分
 
 ---
 
@@ -106,7 +106,7 @@
 
 ---
 
-## AI 蛇系統
+## 敵蛇系統
 
 ### 生成規則
 - 數量：`1 + floor((玩家等級 - 1) / 4)`
@@ -132,7 +132,7 @@
 | Lv.3 | 2.0x | 雙蛇 + 眩暈後停頓 3 秒 |
 
 ### 閃電
-| 等級 | 範圍 | 預警 | AI 眩暈 | 玩家加速 |
+| 等級 | 範圍 | 預警 | 敵蛇眩暈 | 玩家加速 |
 |------|------|------|----------|----------|
 | Lv.1 | 4×4 | 2秒 | 3秒 | 1.2x |
 | Lv.2 | 4×4 | 2秒 | 4秒 | 1.5x |
@@ -153,12 +153,12 @@
 #### 撞擊效果循環
 - 第1次撞擊：眩暈 2 秒
 - 第2次撞擊：停頓 3 秒
-- 第3次撞擊：連續雷擊（以該 AI 為中心 5×5 範圍爆炸，周圍 AI 眩暈 1 秒 + 停頓 1 秒，玩家加速 2 秒）
+- 第3次撞擊：連續雷擊（以該敵蛇為中心 5×5 範圍爆炸，周圍敵蛇眩暈 1 秒 + 停頓 1 秒，玩家加速 2 秒）
 - 之後循環：眩暈→停頓→連續雷擊
 
 #### 連鎖雷擊：
 - 以敵人蛇為中心 5×5 雷區爆炸
-- 周圍 AI 全部短暫眩暈1秒，且眩暈完停頓持續1秒
+- 周圍敵蛇全部短暫眩暈1秒，且眩暈完停頓持續1秒
 
 #### 連續雷擊視覺
 - 預警 2 秒（黃色）
@@ -188,7 +188,7 @@
 
 ## 渲染順序（從下到上）
 
-1. AI 蛇
+1. 敵蛇
 2. 守護蛇
 3. 玩家蛇
 4. 食物
@@ -211,13 +211,13 @@
 
 ### 區域劃分
 - 玩家果子：(12, 16)
-- AI 果子：(10, 5)
+- 敵蛇果子：(10, 5)
 
 ### 流程
-1. 玩家吃果子 → 出現 AI 蛇
-2. AI 吃果子 → 扣 10 分
+1. 玩家吃果子 → 出現敵蛇
+2. 敵蛇吃果子 → 扣 10 分
 3. 提示按空白召喚守護蛇
-4. 守護蛇撞 AI → AI 眩暈 → 2 秒後彈窗
+4. 守護蛇撞 敵蛇→ 敵蛇眩暈 → 2 秒後彈窗
 
 ### 完成彈窗
 - 標題：教學完成！
