@@ -193,12 +193,12 @@ const movePlayer = () => {
     
     if (tutorialStep.value === 'move') {
       tutorialStep.value = 'aiSpawn'
-      showHint.value = '等待 AI 蛇...'
+      showHint.value = '等待敵蛇...'
       food.value = { x: -1, y: -1 }
       setTimeout(() => {
         initAI()
         tutorialStep.value = 'aiEat'
-        showHint.value = 'AI 蛇正在進食...'
+        showHint.value = '敵蛇正在進食...'
         if (gameTimer) {
           clearInterval(gameTimer)
           gameTimer = setInterval(movePlayer, BASE_SPEED)

@@ -195,9 +195,9 @@ function generateAvailableSkills(): void {
   
   // 检查是否需要添加新的 AI 蛇
   const playerLevel = Math.floor(eatenCount.value / 5) + 1
-  const targetAICount = Math.floor((playerLevel - 1) / 3) + 1
+  const targetAICount = Math.floor((playerLevel - 1) / 4) + 1
   
-  while (aiSnakes.value.length < targetAICount) {
+  while (aiSnakes.value.length < targetAICount && aiSnakes.value.length < 5) {
     const newSnake = createAISnake()
     aiSnakes.value.push(newSnake)
     const aiSpeed = currentSpeed() / AI_SPEED_MULTIPLIER
@@ -285,7 +285,7 @@ function generateAvailableSkills(): void {
     availableSkills.value.push({
       key: 'frostLord',
       name: '極寒領主',
-      desc: '召喚極寒領主，行進路線會形成冰路，撞到敵人會造成冰凍',
+      desc: '召喚極寒領主，撞到敵人會造成冰凍，行進路線會形成<span class="tooltip-tip-road">冰路</span>',
       isUnlock: true
     })
   }
@@ -342,7 +342,7 @@ function resumeFromLevelUp(): void {
   gameLoop()
 }
 
-function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | 'ice-field' | 'thunder-dragon' | 'chain-lightning-warning' | 'chain-lightning-strike' | null {
+function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'ai-head' | 'defender-snake' | 'defender-head' | 'lightning-warning' | 'lightning-strike' | 'snake-boosted' | 'head-boosted' | 'ai-snake-slowed' | 'ai-head-slowed' | 'ice-field' | 'thunder-dragon' | 'chain-lightning-warning' | 'chain-lightning-strike' | 'frost-lord-head'  | 'frost-lord-path'  | 'frost-lord-field' | null {
   const x = (index - 1) % GRID_WIDTH
   const y = Math.floor((index - 1) / GRID_WIDTH)
 
@@ -397,7 +397,7 @@ function getCellType(index: number): 'snake' | 'head' | 'food' | 'ai-snake' | 'a
     const halfSize = Math.floor(iceSize / 2)
     if (x >= head.x - halfSize && x <= head.x + halfSize &&
         y >= head.y - halfSize && y <= head.y + halfSize) {
-return 'ice-field'
+      return 'ice-field'
     }
   }
   
@@ -593,8 +593,8 @@ function move(): void {
     activateLightning()
   }
   
-  // 自动释放冰冻技能（已解锁，CD 完毕）
-  if (iceSkill.value.level > 0 && iceSkill.value.cooldown <= 0 && !iceActive.value) {
+  // 自动释放冰冻技能（已解锁，CD 完毕，極寒領主解鎖後不觸發）
+  if (iceSkill.value.level > 0 && iceSkill.value.cooldown <= 0 && !iceActive.value && !frostLordSkill.value.unlocked) {
     activateIce()
   }
   
@@ -604,39 +604,68 @@ function move(): void {
   }
   
   // 自动释放极寒领主技能（已解锁，CD 完毕，未激活）
-  console.log('move check frostLord', { 
-    gameStatus: gameStatus.value,
-    unlocked: frostLordSkill.value.unlocked, 
-    cooldown: frostLordSkill.value.cooldown,
-    active: frostLordActive.value 
-  })
   if (frostLordSkill.value.unlocked && frostLordSkill.value.cooldown <= 0 && !frostLordActive.value) {
     activateFrostLord()
   }
 }
 
+function activateThunderDragon(): void {
+  if (thunderDragonSkill.value.cooldown > 0 || thunderDragons.value.length > 0) return
+  
+  const head = snake.value[0]!
+  const radius = 5
+  
+  // 生成6只天譴之龍
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI * 2 / 6) * i
+    const x = Math.round(head.x + radius * Math.cos(angle))
+    const y = Math.round(head.y + radius * Math.sin(angle))
+    
+    thunderDragons.value.push({
+      position: { x, y },
+      direction: 'RIGHT'
+    })
+    
+    const speed = BASE_SPEED / 2.0
+    const timer = setInterval(() => moveThunderDragon(i), speed)
+    thunderDragonTimers.push(timer)
+  }
+  
+  // 3秒后结束
+  setTimeout(() => {
+    for (const timer of thunderDragonTimers) {
+      clearInterval(timer)
+    }
+    thunderDragonTimers = []
+    thunderDragons.value = []
+    aiHitCounts.value.clear()
+    
+    thunderDragonSkill.value.cooldown = THUNDER_DRAGON_COOLDOWN
+    if (thunderCooldownTimer) clearInterval(thunderCooldownTimer)
+    thunderCooldownTimer = setInterval(() => {
+      thunderDragonSkill.value.cooldown -= 100
+      if (thunderDragonSkill.value.cooldown <= 0) {
+        thunderDragonSkill.value.cooldown = 0
+        if (thunderCooldownTimer) {
+          clearInterval(thunderCooldownTimer)
+          thunderCooldownTimer = null
+        }
+      }
+    }, 100)
+  }, 3000)
+}
+
 function activateFrostLord(): void {
-  console.log('activateFrostLord called', { 
-    unlocked: frostLordSkill.value.unlocked, 
-    cooldown: frostLordSkill.value.cooldown,
-    active: frostLordActive.value 
-  })
   if (frostLordActive.value || frostLordSkill.value.cooldown > 0) return
   
   const head = snake.value[0]!
   const radius = 3
   
+  // 初始化角度，从正右方开始（0度）
   frostLordAngle = 0
-  frostLordSnake.value = []
-  for (let i = 0; i < 5; i++) {
-    const angle = frostLordAngle - (i * Math.PI / 4)
-    const px = Math.round(head.x + radius * Math.cos(angle))
-    const py = Math.round(head.y + radius * Math.sin(angle))
-    frostLordSnake.value.push({
-      x: ((px % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH,
-      y: ((py % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
-    })
-  }
+  const px = Math.round(head.x + radius * Math.cos(frostLordAngle))
+  const py = Math.round(head.y + radius * Math.sin(frostLordAngle))
+  frostLordSnake.value = [{ x: px, y: py }]
   
   frostLordActive.value = true
   
@@ -677,28 +706,27 @@ function deactivateFrostLord(): void {
   }, 100)
 }
 
+// 冰蛇使用圆周运动，围绕玩家蛇头旋转
 function moveFrostLordSnake(): void {
-  console.log('moveFrostLordSnake called', { snakeLength: frostLordSnake.value.length, pathLength: frostLordPath.value.length })
   if (gameStatus.value !== 'playing' || !frostLordActive.value) return
   
   const head = snake.value[0]!
   const radius = 3
   
-  frostLordAngle -= Math.PI / 4
+  // 每次只转15度（更平滑），逆时针
+  frostLordAngle -= Math.PI / 12
   
-  const newPositions: Position[] = []
-  for (let i = 0; i < 5; i++) {
-    const angle = frostLordAngle - (i * Math.PI / 4)
-    const px = Math.round(head.x + radius * Math.cos(angle))
-    const py = Math.round(head.y + radius * Math.sin(angle))
-    newPositions.push({
-      x: ((px % GRID_WIDTH) + GRID_WIDTH) % GRID_WIDTH,
-      y: ((py % GRID_HEIGHT) + GRID_HEIGHT) % GRID_HEIGHT
-    })
-  }
+  // 根据当前角度计算新位置
+  const px = Math.round(head.x + radius * Math.cos(frostLordAngle))
+  const py = Math.round(head.y + radius * Math.sin(frostLordAngle))
+  
+  const nextX = px
+  const nextY = py
+  
+  // 更新位置
+  const newPositions = [{ x: nextX, y: nextY }]
   
   const oldHead = frostLordSnake.value[0]
-  console.log('Recording path', { oldHead, currentPathLength: frostLordPath.value.length })
   if (oldHead) {
     const pathEntry = { 
       position: { ...oldHead },
@@ -710,7 +738,6 @@ function moveFrostLordSnake(): void {
       }, 3000)
     }
     frostLordPath.value.push(pathEntry)
-    console.log('Path added, new length:', frostLordPath.value.length)
   }
   
   frostLordSnake.value = newPositions
@@ -1284,10 +1311,10 @@ function resetGame(): void {
   playerSpeedBoosted.value = false
   iceActive.value = false
   
-  defenderSkill.value.level = 3
+  defenderSkill.value.level = 1
   lightningSkill.value.level = 0
   lightningSkill.value.cooldown = 0
-  iceSkill.value.level = 3
+  iceSkill.value.level = 0
   iceSkill.value.cooldown = 0
   
   lightningActive.value = false
@@ -2344,6 +2371,27 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 
 .skill-card .skill-desc :deep(.tooltip-text-chain):hover::after {
   content: '以敵人蛇為中心 5×5 雷區爆炸，周圍敵人全部短暫眩暈1秒，且眩暈完停頓持續1秒';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #333;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.skill-card .skill-desc :deep(.tooltip-text-road) {
+  text-decoration: underline;
+  cursor: help;
+  position: relative;
+}
+
+.skill-card .skill-desc :deep(.tooltip-text-road):hover::after {
+  content: '在上面的敵蛇無法改變方向';
   position: absolute;
   bottom: 100%;
   left: 50%;

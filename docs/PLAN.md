@@ -41,6 +41,10 @@
 | `aiHitCounts` | `Ref<Map<string, number>>` | 每隻龍對每條AI的撞擊次數 |
 | `chainLightningPosition` | `Ref<Position \| null>` | 連續雷擊位置 |
 | `chainLightningPhase` | `'none' \| 'warning' \| 'strike'` | 連續雷擊階段 |
+| `frostLordSkill` | `Ref<{level, unlocked, cooldown}>` |	極寒領主技能狀態 |
+| `iceSnake` | `Ref<{position, direction, angle}>` | 冰蛇位置、方向、角度 |
+| `icePathTiles` | `Ref<{position, timer}[]>` | 冰路瓷磚陣列 |
+| `icePathSlipEffects` | `Ref<Map<string, number>>` | 踩上冰路打滑的 AI 及剩餘時間 |
 
 ---
 
@@ -64,6 +68,11 @@
 | `triggerChainLightning()` | 連續雷擊效果（5×5範圍，周圍AI眩暈+停頓，玩家加速） |
 | `moveThunderDragon()` | 天譴之龍移動 + 撞擊遞進效果 |
 | `activateThunderDragon()` | 召喚6隻天譴之龍（玩家左3右3） |
+| `activateFrostLord()` | 召喚極寒領主（5×5 減速範圍 + 冰蛇 + 冰路） |
+| `moveIceSnake()` | 冰蛇圓周運動（15° 遞進） |
+| `createIcePath()` | 在冰蛇路徑留下冰路瓷磚（持續 3 秒） |
+| `updateIcePaths()` | 更新冰路計時器，清除過期瓷磚 |
+| `checkIcePathSlip()` | 檢查 AI 是否踩上冰路，觸發打滑效果 |
 
 ---
 
@@ -90,7 +99,7 @@
 |------|------|
 | 方向鍵 | 移動 / 開始遊戲 |
 | R | 暫停/繼續（需按兩次） |
-| 空白鍵 | 召喚守護蛇（天譴之龍解鎖後無法使用） |
+| 空白鍵 | 召喚守護蛇（天譴之龍或極寒領主解鎖後無法使用） |
 | 1/2/3 | 選擇技能 |
 | 兩次空白鍵 | 遊戲結束後重新開始 |
 | 兩次 R 鍵 | 跳過技能選擇 |
@@ -100,7 +109,7 @@
 ## AI 蛇系統
 
 ### 生成規則
-- 數量：`1 + floor((玩家等級 - 1) / 3)`
+- 數量：`1 + floor((玩家等級 - 1) / 4)`
 - 初始：1 條
 - 長度：固定 3
 
@@ -159,6 +168,22 @@
 - 守護蛇和閃電技能隱藏，無法升級也無法使用
 - 守護蛇按空白鍵無法召喚
 
+### 極寒領主
+| 等級 | 條件 | 效果 |
+|------|------|------|
+| Lv.1 | 守護蛇 Lv.3 + 冰凍 Lv.3 | 5×5 減速範圍 + 冰蛇圓周運動 + 冰路 |
+
+#### 冰蛇圓周運動
+- 撞到冰蛇冰凍敵蛇5秒（無法移動）
+
+#### 冰路
+- 出現在冰蛇的路徑下，會逐漸消失(持續3秒)
+- 當敵蛇踩在冰路上會打滑(無法改變方向)
+
+#### 解鎖後影響
+- 守護蛇和冰凍技能隱藏，無法升級也無法使用
+- 守護蛇按空白鍵無法召喚
+
 ---
 
 ## 渲染順序（從下到上）
@@ -171,6 +196,7 @@
 6. 閃電效果
 7. 天譴之龍
 8. 連續雷擊（預警 → 轟炸）
+9. 極寒領主
 
 ---
 
@@ -224,3 +250,8 @@
 - 升級時顯示暫停畫面 → 新增 `levelup` 狀態
 - 重新開始有殘留特效 → `resetGame()` 清除所有狀態
 - 天譴之龍解鎖後仍可用守護蛇 → `activateDefender()` 新增檢查
+- 連續雷擊只顯示最後一次觸發效果 → 改為陣列儲存 {position, phase}，用 unique key 渲染
+- 升級時速度異常	resetGame() → 清空 playerSpeedMultiplier
+- 暫停時冷卻計時器繼續運作 → togglePause() 清除所有冷卻/效果計時器
+- 遊戲結束按一次空白就重啟 → 改為需要按兩次空白鍵
+- 極寒領主解鎖後冰凍技能仍自動觸發 → 新增 !frostLordSkill.value.unlocked 檢查
